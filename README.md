@@ -42,7 +42,7 @@ Then open **http://localhost:8080** for the UI.
 ./mvnw test
 ```
 
-41 tests:
+47 tests:
 
 - **Unit tests:** the picture client with a mocked HTTP server (image and JSON sources, fallback, URL rewriting, circuit breaker open / half-open / close), JSON Pointer lookup, and the service.
 - **Config test:** checks that the shipped `application.yml` gives every animal a backup source.
@@ -56,6 +56,7 @@ They need no network access, so they run in CI.
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/api/pictures` | **a.** Fetches random pictures and stores them. Body: `{"animal": "cat\|dog\|bear", "count": 1-10}`. Returns `201` with metadata for each saved picture. |
+| `GET` | `/api/pictures?animal=&limit=` | Recently stored pictures, newest first (metadata only). `animal` is optional; `limit` is 1–50, default 12 |
 | `GET` | `/api/pictures/latest` | **b.** The **latest fetched picture** (any animal), as an image |
 | `GET` | `/api/pictures/latest/metadata` | Its metadata as JSON |
 | `GET` | `/api/pictures/{animal}/last` | Latest picture of one animal, as an image |
@@ -148,7 +149,15 @@ Check the live state with `GET /api/sources`. Tune it with `pictures.circuit-bre
 
 ## Web UI and CORS
 
-- **UI:** the Spring Boot app also serves a small web UI (`src/main/resources/static/index.html`) at `/`. Choose an animal and count, then fetch, or show the latest picture.
+- **UI:** the Spring Boot app also serves a small web UI (`src/main/resources/static/index.html`) at `/`. Plain HTML and JavaScript, no framework. It has three parts:
+  - **Fetch pictures:** choose an animal and count, fetch and save, or show the latest picture.
+  - **Recent pictures:** a gallery of the latest 24 pictures, filterable by animal, showing each one's source website and time. It refreshes after every fetch.
+  - **Picture sources:** every source with its circuit-breaker state (`CLOSED` / `OPEN` / `HALF_OPEN`) and recent failures. It refreshes every 5 s.
+
+  ![UI screenshot](docs/ui-screenshot.png)
+
+  *Screenshot taken with the cat primary deliberately pointed at a dead address, to show an `OPEN` circuit; the cats came from the placecats.com backup.*
+
 - **CORS isn't needed for this UI.** It's served from the same origin as the API.
 - **CORS is configured for `/api/**`** so a UI hosted elsewhere (e.g. a React dev server) can call the API. Allowed origins come from `CORS_ALLOWED_ORIGINS`, default `http://localhost:3000,http://localhost:5173`. Requests from other origins are rejected with `403`.
 

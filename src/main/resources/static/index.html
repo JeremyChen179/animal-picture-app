@@ -4,37 +4,82 @@
   <meta charset="UTF-8">
   <title>Animal Pictures</title>
   <style>
-    body { font-family: sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+    body { font-family: sans-serif; max-width: 1000px; margin: 2rem auto; padding: 0 1rem; }
+    section { margin-bottom: 2rem; }
     fieldset { margin-bottom: 1rem; }
-    #gallery img { max-width: 260px; margin: 4px; border: 1px solid #ccc; }
-    #status { margin: 1rem 0; }
+    #status { margin: 1rem 0; min-height: 1.2em; }
     .error { color: #b00020; }
+    #result img { max-width: 320px; margin: 4px; border: 1px solid #ccc; }
+    #gallery { display: flex; flex-wrap: wrap; gap: 8px; }
+    #gallery figure { margin: 0; width: 180px; }
+    #gallery img { width: 180px; height: 140px; object-fit: cover; border: 1px solid #ccc; }
+    #gallery figcaption { font-size: 0.8em; color: #555; }
+    table { border-collapse: collapse; }
+    th, td { border: 1px solid #ccc; padding: 4px 8px; text-align: left; }
+    .CLOSED { color: #1b7f1b; font-weight: bold; }
+    .OPEN { color: #b00020; font-weight: bold; }
+    .HALF_OPEN { color: #b36b00; font-weight: bold; }
+    .muted { color: #777; font-size: 0.85em; }
   </style>
 </head>
 <body>
   <h1>Animal Pictures</h1>
 
-  <fieldset>
-    <legend>Fetch and save new pictures</legend>
-    <label>Animal
-      <select id="animal">
-        <option value="cat">Cat</option>
-        <option value="dog">Dog</option>
-        <option value="bear">Bear</option>
+  <section>
+    <h2>Fetch pictures</h2>
+    <fieldset>
+      <legend>Fetch and save new pictures</legend>
+      <label>Animal
+        <select id="animal">
+          <option value="cat">Cat</option>
+          <option value="dog">Dog</option>
+          <option value="bear">Bear</option>
+        </select>
+      </label>
+      <label>Count <input id="count" type="number" min="1" max="10" value="1"></label>
+      <button id="fetch">Fetch &amp; save</button>
+      <button id="last">Show last saved of this animal</button>
+      <button id="latest">Show latest of any animal</button>
+    </fieldset>
+    <div id="status"></div>
+    <div id="result"></div>
+  </section>
+
+  <section>
+    <h2>Recent pictures</h2>
+    <label>Show
+      <select id="gallery-filter">
+        <option value="">All animals</option>
+        <option value="cat">Cats</option>
+        <option value="dog">Dogs</option>
+        <option value="bear">Bears</option>
       </select>
     </label>
-    <label>Count <input id="count" type="number" min="1" max="10" value="1"></label>
-    <button id="fetch">Fetch &amp; save</button>
-    <button id="last">Show last saved of this animal</button>
-    <button id="latest">Show latest of any animal</button>
-  </fieldset>
+    <button id="gallery-refresh">Refresh</button>
+    <p id="gallery-empty" class="muted" hidden>No pictures stored yet. Fetch some above.</p>
+    <div id="gallery"></div>
+  </section>
 
-  <div id="status"></div>
-  <div id="gallery"></div>
+  <section>
+    <h2>Picture sources</h2>
+    <p class="muted">
+      Sources are tried in order. A source that fails twice in a row is skipped for 60&nbsp;s
+      (<span class="OPEN">OPEN</span>), then one trial request decides whether it's used again
+      (<span class="HALF_OPEN">HALF_OPEN</span> → <span class="CLOSED">CLOSED</span>). Refreshes every 5&nbsp;s.
+    </p>
+    <table>
+      <thead><tr><th>Animal</th><th>Order</th><th>Website</th><th>State</th><th>Recent calls failed</th></tr></thead>
+      <tbody id="sources"></tbody>
+    </table>
+  </section>
 
   <script>
     const statusEl = document.getElementById('status');
-    const gallery = document.getElementById('gallery');
+    const resultEl = document.getElementById('result');
+    const galleryEl = document.getElementById('gallery');
+    const galleryEmptyEl = document.getElementById('gallery-empty');
+    const galleryFilterEl = document.getElementById('gallery-filter');
+    const sourcesEl = document.getElementById('sources');
     const animal = () => document.getElementById('animal').value;
 
     function setStatus(text, isError) {
@@ -42,19 +87,25 @@
       statusEl.className = isError ? 'error' : '';
     }
 
-    function showImages(urls) {
-      gallery.innerHTML = '';
-      urls.forEach(url => {
-        const img = document.createElement('img');
-        img.src = url;
-        gallery.appendChild(img);
-      });
-    }
-
     async function errorText(response) {
       try { return (await response.json()).detail || response.statusText; }
       catch { return response.statusText; }
     }
+
+    function showResult(urls) {
+      resultEl.replaceChildren(...urls.map(url => {
+        const img = document.createElement('img');
+        img.src = url;
+        return img;
+      }));
+    }
+
+    function caption(picture) {
+      return '#' + picture.id + ' ' + picture.animalType.toLowerCase() + ' · ' + picture.sourceWebsite
+        + ' · ' + new Date(picture.createdAt).toLocaleString();
+    }
+
+    // --- Fetch ---
 
     document.getElementById('fetch').addEventListener('click', async () => {
       const count = Number(document.getElementById('count').value);
@@ -64,23 +115,86 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ animal: animal(), count })
       });
-      if (!response.ok) { setStatus('Error: ' + await errorText(response), true); return; }
-      const saved = await response.json();
-      setStatus('Saved ' + saved.length + ' picture(s) from ' + [...new Set(saved.map(p => p.sourceWebsite))].join(', ')
-        + ': ids ' + saved.map(p => p.id).join(', '));
-      showImages(saved.map(p => p.imageUrl));
+      if (!response.ok) {
+        setStatus('Error: ' + await errorText(response), true);
+      } else {
+        const saved = await response.json();
+        setStatus('Saved ' + saved.length + ' picture(s) from ' + [...new Set(saved.map(p => p.sourceWebsite))].join(', ')
+          + ': ids ' + saved.map(p => p.id).join(', '));
+        showResult(saved.map(p => p.imageUrl));
+      }
+      // Refresh both panels either way: a failure may have opened a circuit breaker.
+      loadGallery();
+      loadSources();
     });
 
     async function showStored(metadataUrl) {
       const response = await fetch(metadataUrl);
-      if (!response.ok) { setStatus('Error: ' + await errorText(response), true); gallery.innerHTML = ''; return; }
+      if (!response.ok) { setStatus('Error: ' + await errorText(response), true); resultEl.replaceChildren(); return; }
       const picture = await response.json();
-      setStatus(picture.animalType + ' #' + picture.id + ' from ' + picture.sourceWebsite + ', fetched ' + picture.createdAt);
-      showImages([picture.imageUrl]);
+      setStatus(caption(picture));
+      showResult([picture.imageUrl]);
     }
 
     document.getElementById('last').addEventListener('click', () => showStored('/api/pictures/' + animal() + '/last/metadata'));
     document.getElementById('latest').addEventListener('click', () => showStored('/api/pictures/latest/metadata'));
+
+    // --- Gallery ---
+
+    async function loadGallery() {
+      const filter = galleryFilterEl.value;
+      const response = await fetch('/api/pictures?limit=24' + (filter ? '&animal=' + filter : ''));
+      if (!response.ok) { galleryEl.replaceChildren(); return; }
+      const pictures = await response.json();
+      galleryEmptyEl.hidden = pictures.length > 0;
+      galleryEl.replaceChildren(...pictures.map(picture => {
+        const figure = document.createElement('figure');
+        const link = document.createElement('a');
+        link.href = picture.imageUrl;
+        link.target = '_blank';
+        const img = document.createElement('img');
+        img.src = picture.imageUrl;
+        img.alt = picture.animalType.toLowerCase();
+        img.loading = 'lazy';
+        link.appendChild(img);
+        const figcaption = document.createElement('figcaption');
+        figcaption.textContent = caption(picture);
+        figure.append(link, figcaption);
+        return figure;
+      }));
+    }
+
+    galleryFilterEl.addEventListener('change', loadGallery);
+    document.getElementById('gallery-refresh').addEventListener('click', loadGallery);
+
+    // --- Source status ---
+
+    async function loadSources() {
+      const response = await fetch('/api/sources');
+      if (!response.ok) return;
+      const sources = await response.json();
+      sourcesEl.replaceChildren(...sources.map(source => {
+        const row = document.createElement('tr');
+        const cells = [
+          source.animalType.toLowerCase(),
+          source.position === 0 ? 'primary' : 'backup ' + source.position,
+          source.website,
+          source.state,
+          source.failedCalls + ' of ' + source.bufferedCalls
+        ];
+        cells.forEach((text, index) => {
+          const cell = document.createElement('td');
+          cell.textContent = text;
+          if (index === 3) cell.className = source.state;
+          row.appendChild(cell);
+        });
+        return row;
+      }));
+    }
+
+    loadGallery();
+    loadSources();
+    setInterval(loadSources, 5000);
   </script>
 </body>
 </html>

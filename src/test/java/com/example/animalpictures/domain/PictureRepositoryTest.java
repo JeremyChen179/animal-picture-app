@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -75,6 +76,28 @@ class PictureRepositoryTest {
         Picture second = repository.save(picture(AnimalType.CAT, new byte[] {2}, same));
 
         assertThat(repository.findLatest()).get().extracting(Picture::id).isEqualTo(second.id());
+    }
+
+    @Test
+    void findRecentReturnsNewestFirstWithSizeAndLimit() {
+        repository.save(picture(AnimalType.CAT, new byte[] {1}, Instant.parse("2026-10-19T10:00:00Z")));
+        Picture dog = repository.save(picture(AnimalType.DOG, new byte[] {1, 2, 3}, Instant.parse("2026-10-19T12:00:00Z")));
+        Picture bear = repository.save(picture(AnimalType.BEAR, new byte[] {1, 2}, Instant.parse("2026-10-19T11:00:00Z")));
+
+        List<PictureSummary> recent = repository.findRecent(null, 2);
+
+        assertThat(recent).extracting(PictureSummary::id).containsExactly(dog.id(), bear.id());
+        assertThat(recent.get(0).sizeBytes()).isEqualTo(3);
+        assertThat(recent.get(0).createdAt()).isEqualTo(Instant.parse("2026-10-19T12:00:00Z"));
+    }
+
+    @Test
+    void findRecentFiltersByAnimal() {
+        Picture cat = repository.save(picture(AnimalType.CAT, new byte[] {1}, Instant.parse("2026-10-19T10:00:00Z")));
+        repository.save(picture(AnimalType.DOG, new byte[] {2}, Instant.parse("2026-10-19T11:00:00Z")));
+
+        assertThat(repository.findRecent(AnimalType.CAT, 10)).extracting(PictureSummary::id).containsExactly(cat.id());
+        assertThat(repository.findRecent(AnimalType.BEAR, 10)).isEmpty();
     }
 
     @Test

@@ -5,6 +5,7 @@ import java.sql.SQLException;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.List;
 import java.util.Optional;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -67,6 +68,30 @@ public class PictureRepository {
                 .param("id", id)
                 .query(ROW_MAPPER)
                 .optional();
+    }
+
+    /**
+     * Most recent pictures first, optionally for one animal. Reads {@code length(image)} instead of the
+     * image itself, so listing doesn't load every picture's bytes.
+     */
+    public List<PictureSummary> findRecent(AnimalType animalType, int limit) {
+        String where = animalType != null ? "WHERE animal_type = :animalType " : "";
+        JdbcClient.StatementSpec statement = jdbc.sql(
+                        "SELECT id, animal_type, content_type, length(image) AS size_bytes, source_website, source_url, created_at "
+                                + "FROM picture " + where + "ORDER BY created_at DESC, id DESC LIMIT :limit")
+                .param("limit", limit);
+        if (animalType != null) {
+            statement = statement.param("animalType", animalType.name());
+        }
+        return statement.query((rs, rowNum) -> new PictureSummary(
+                        rs.getLong("id"),
+                        AnimalType.valueOf(rs.getString("animal_type")),
+                        rs.getString("content_type"),
+                        rs.getInt("size_bytes"),
+                        rs.getString("source_website"),
+                        rs.getString("source_url"),
+                        Instant.from(TIMESTAMP_FORMAT.parse(rs.getString("created_at")))))
+                .list();
     }
 
     public long count() {

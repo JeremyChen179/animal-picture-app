@@ -164,6 +164,57 @@ class PictureControllerIntegrationTest {
     }
 
     @Test
+    void listsRecentPicturesNewestFirstWithFilterAndLimit() throws Exception {
+        when(client.fetchRandom(AnimalType.CAT))
+                .thenReturn(new FetchedImage(new byte[] {1}, "image/jpeg", "https://cataas.com/cat", "cataas.com"));
+        when(client.fetchRandom(AnimalType.DOG))
+                .thenReturn(new FetchedImage(new byte[] {2, 2}, "image/jpeg", "https://place.dog/300/200", "place.dog"));
+        saveOne("cat");
+        saveOne("dog");
+        saveOne("cat");
+
+        mockMvc.perform(get("/api/pictures"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(3))
+                .andExpect(jsonPath("$[0].animalType").value("CAT"))
+                .andExpect(jsonPath("$[1].animalType").value("DOG"))
+                .andExpect(jsonPath("$[1].sizeBytes").value(2))
+                .andExpect(jsonPath("$[1].imageUrl").exists());
+
+        mockMvc.perform(get("/api/pictures").param("animal", "dog"))
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].sourceWebsite").value("place.dog"));
+
+        mockMvc.perform(get("/api/pictures").param("limit", "1"))
+                .andExpect(jsonPath("$.length()").value(1));
+    }
+
+    @Test
+    void listIsEmptyWhenNothingStored() throws Exception {
+        mockMvc.perform(get("/api/pictures"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
+    }
+
+    @Test
+    void listRejectsInvalidLimitAndAnimal() throws Exception {
+        mockMvc.perform(get("/api/pictures").param("limit", "51"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("limit must be at most 50"));
+        mockMvc.perform(get("/api/pictures").param("animal", "unicorn"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void servesUiWithGalleryAndSourceStatus() throws Exception {
+        mockMvc.perform(get("/index.html"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("id=\"gallery\"")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("id=\"sources\"")))
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("/api/sources")));
+    }
+
+    @Test
     void sourcesEndpointListsCircuitBreakerStates() throws Exception {
         when(client.sourceStatuses()).thenReturn(List.of(
                 new SourceStatus(AnimalType.CAT, 0, "cataas.com", "https://cataas.com/cat", "OPEN", 2, 2),

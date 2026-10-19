@@ -7,8 +7,10 @@ import static org.springframework.test.web.client.match.MockRestRequestMatchers.
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withServerError;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
+import com.example.animalpictures.client.PictureSourceProperties.CircuitBreakerSettings;
 import com.example.animalpictures.client.PictureSourceProperties.Source;
 import com.example.animalpictures.domain.AnimalType;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -23,11 +25,27 @@ class AnimalPictureClientTest {
 
     private MockRestServiceServer server;
 
+    /** Short open duration so tests can wait for the HALF_OPEN trial. */
+    private static final Duration OPEN_DURATION = Duration.ofMillis(300);
+
     /** Fixed size (min == max) makes the expanded URLs predictable. */
     private AnimalPictureClient clientWith(Map<AnimalType, List<Source>> sources) {
         RestClient.Builder builder = RestClient.builder();
         server = MockRestServiceServer.bindTo(builder).build();
-        return new AnimalPictureClient(builder.build(), new PictureSourceProperties(sources, 300, 300));
+        return new AnimalPictureClient(builder.build(), new PictureSourceProperties(sources, 300, 300,
+                new CircuitBreakerSettings(2, OPEN_DURATION)));
+    }
+
+    private AnimalPictureClient catClientWithBackup() {
+        return clientWith(Map.of(AnimalType.CAT, List.of(
+                Source.image("https://cats-primary.test/{width}/{height}"),
+                Source.image("https://cats-backup.test/{width}/{height}"))));
+    }
+
+    private static String stateOf(AnimalPictureClient client, int position) {
+        return client.sourceStatuses().stream()
+                .filter(status -> status.position() == position)
+                .findFirst().orElseThrow().state();
     }
 
     // --- image sources ---
@@ -178,5 +196,101 @@ class AnimalPictureClientTest {
         assertThatThrownBy(() -> client.fetchRandom(AnimalType.DOG))
                 .isInstanceOf(PictureSourceException.class)
                 .hasMessageContaining("No picture source configured for DOG");
+    }
+
+    // --- circuit breaker ---
+
+    @Test
+    void circuitOpensAfterTwoFailuresAndPrimaryIsSkipped() {
+        AnimalPictureClient client = catClientWithBackup();
+        // Two requests: the primary fails each time, the backup answers.
+        for (int i = 0; i < 2; i++) {
+            server.expect(requestTo("https://cats-primary.test/300/300")).andRespond(withServerError());
+            server.expect(requestTo("https://cats-backup.test/300/300")).andRespond(withSuccess(JPEG, MediaType.IMAGE_JPEG));
+        }
+        // Third request: the primary must NOT be called at all; only the backup is expected.
+        server.expect(requestTo("https://cats-backup.test/300/300")).andRespond(withSuccess(JPEG, MediaType.IMAGE_JPEG));
+
+        for (int i = 0; i < 3; i++) {
+            assertThat(client.fetchRandom(AnimalType.CAT).sourceUrl()).isEqualTo("https://cats-backup.test/300/300");
+        }
+
+        server.verify();
+        assertThat(stateOf(client, 0)).isEqualTo("OPEN");
+        assertThat(stateOf(client, 1)).isEqualTo("CLOSED");
+    }
+
+    @Test
+    void primaryIsRetriedAfterOpenDurationAndClosesOnSuccess() throws InterruptedException {
+        AnimalPictureClient client = catClientWithBackup();
+        // Whole expected sequence up front (ordered): 2x primary fails -> backup, then a trial call on the primary.
+        for (int i = 0; i < 2; i++) {
+            server.expect(requestTo("https://cats-primary.test/300/300")).andRespond(withServerError());
+            server.expect(requestTo("https://cats-backup.test/300/300")).andRespond(withSuccess(JPEG, MediaType.IMAGE_JPEG));
+        }
+        server.expect(requestTo("https://cats-primary.test/300/300")).andRespond(withSuccess(JPEG, MediaType.IMAGE_JPEG));
+
+        client.fetchRandom(AnimalType.CAT);
+        client.fetchRandom(AnimalType.CAT);
+        assertThat(stateOf(client, 0)).isEqualTo("OPEN");
+
+        Thread.sleep(OPEN_DURATION.toMillis() + 200);
+        // Trial call (HALF_OPEN): the primary has recovered.
+        assertThat(client.fetchRandom(AnimalType.CAT).sourceUrl()).isEqualTo("https://cats-primary.test/300/300");
+        server.verify();
+        assertThat(stateOf(client, 0)).isEqualTo("CLOSED");
+    }
+
+    @Test
+    void failedTrialCallReopensCircuit() throws InterruptedException {
+        AnimalPictureClient client = catClientWithBackup();
+        // 2x primary fails -> backup; after the wait the trial call fails too -> backup again.
+        for (int i = 0; i < 3; i++) {
+            server.expect(requestTo("https://cats-primary.test/300/300")).andRespond(withServerError());
+            server.expect(requestTo("https://cats-backup.test/300/300")).andRespond(withSuccess(JPEG, MediaType.IMAGE_JPEG));
+        }
+
+        client.fetchRandom(AnimalType.CAT);
+        client.fetchRandom(AnimalType.CAT);
+        Thread.sleep(OPEN_DURATION.toMillis() + 200);
+
+        assertThat(client.fetchRandom(AnimalType.CAT).sourceUrl()).isEqualTo("https://cats-backup.test/300/300");
+        server.verify();
+        assertThat(stateOf(client, 0)).isEqualTo("OPEN");
+    }
+
+    @Test
+    void failsFastWhenEverySourceIsOpen() {
+        AnimalPictureClient client = clientWith(Map.of(AnimalType.BEAR, List.of(
+                Source.image("https://placebear.test/{width}/{height}"))));
+        server.expect(requestTo("https://placebear.test/300/300")).andRespond(withServerError());
+        server.expect(requestTo("https://placebear.test/300/300")).andRespond(withServerError());
+        for (int i = 0; i < 2; i++) {
+            assertThatThrownBy(() -> client.fetchRandom(AnimalType.BEAR)).isInstanceOf(PictureSourceException.class);
+        }
+
+        // No HTTP call expected now: the only source is open, so the request fails immediately.
+        assertThatThrownBy(() -> client.fetchRandom(AnimalType.BEAR))
+                .isInstanceOf(PictureSourceException.class)
+                .hasMessageContaining("temporarily skipped (circuit open)");
+        server.verify();
+    }
+
+    @Test
+    void successResetsFailureCount() {
+        AnimalPictureClient client = catClientWithBackup();
+        // fail, succeed, fail: never two failures in a row, so the circuit stays closed.
+        server.expect(requestTo("https://cats-primary.test/300/300")).andRespond(withServerError());
+        server.expect(requestTo("https://cats-backup.test/300/300")).andRespond(withSuccess(JPEG, MediaType.IMAGE_JPEG));
+        server.expect(requestTo("https://cats-primary.test/300/300")).andRespond(withSuccess(JPEG, MediaType.IMAGE_JPEG));
+        server.expect(requestTo("https://cats-primary.test/300/300")).andRespond(withServerError());
+        server.expect(requestTo("https://cats-backup.test/300/300")).andRespond(withSuccess(JPEG, MediaType.IMAGE_JPEG));
+
+        for (int i = 0; i < 3; i++) {
+            client.fetchRandom(AnimalType.CAT);
+        }
+
+        server.verify();
+        assertThat(stateOf(client, 0)).isEqualTo("CLOSED");
     }
 }

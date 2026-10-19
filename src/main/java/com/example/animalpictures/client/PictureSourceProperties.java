@@ -1,6 +1,7 @@
 package com.example.animalpictures.client;
 
 import com.example.animalpictures.domain.AnimalType;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -11,9 +12,27 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @param sources  ordered sources per animal
  * @param minSize  smallest random width/height substituted into {@code {width}} / {@code {height}}
  * @param maxSize  largest random width/height
+ * @param circuitBreaker when to stop calling a failing source for a while
  */
 @ConfigurationProperties(prefix = "pictures")
-public record PictureSourceProperties(Map<AnimalType, List<Source>> sources, int minSize, int maxSize) {
+public record PictureSourceProperties(Map<AnimalType, List<Source>> sources, int minSize, int maxSize,
+                                      CircuitBreakerSettings circuitBreaker) {
+
+    public PictureSourceProperties {
+        if (circuitBreaker == null) {
+            circuitBreaker = CircuitBreakerSettings.DEFAULT;
+        }
+    }
+
+    /**
+     * Per-source circuit breaker. After {@code failureThreshold} failures in a row the source is skipped
+     * (circuit OPEN) for {@code openDuration}; then one trial call is allowed (HALF_OPEN) and a success
+     * closes the circuit again.
+     */
+    public record CircuitBreakerSettings(int failureThreshold, Duration openDuration) {
+
+        public static final CircuitBreakerSettings DEFAULT = new CircuitBreakerSettings(2, Duration.ofSeconds(60));
+    }
 
     /**
      * One upstream picture API.

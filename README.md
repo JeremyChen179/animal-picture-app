@@ -1,0 +1,172 @@
+# Animal Picture App
+
+A Spring Boot microservice that fetches random pictures of cats, dogs or bears from public picture APIs, stores them in an embedded **SQLite** database (image binary, timestamp, source website), and returns the latest stored picture. A simple web UI is served by the same app.
+
+**Stack:** Java 21 · Spring Boot 4.1 · Maven (wrapper included) · SQLite (`sqlite-jdbc`) · JUnit 5 / Mockito · Docker · GitHub Actions
+
+## Running it
+
+You can build and run it **from source** or **in Docker**. Each path works on its own.
+
+### Option 1: From source (needs JDK 21)
+
+```bash
+./mvnw spring-boot:run          # macOS / Linux
+mvnw.cmd spring-boot:run        # Windows
+```
+
+Or build the executable jar and run it:
+
+```bash
+./mvnw package
+java -jar target/animal-picture-app-1.0.0.jar
+```
+
+- **No Maven install needed:** the wrapper downloads Maven.
+- **No database setup needed:** the SQLite driver creates `./data/pictures.db` automatically on first start.
+- **No application server needed:** the jar is a self-contained executable with an embedded web server (Tomcat inside the jar). You don't deploy it to a separate Tomcat or Apache server; `java -jar` is all it takes.
+
+### Option 2: Docker (no Java needed)
+
+```bash
+docker compose up --build
+```
+
+The multi-stage `Dockerfile` builds from source inside the container (JDK stage, tests included) and runs the jar on a JRE-only image as a non-root user. The SQLite file is kept in the `picture-data` volume. `docker compose down -v` deletes it.
+
+Then open **http://localhost:8080** for the UI.
+
+### Tests
+
+```bash
+./mvnw test
+```
+
+25 tests:
+
+- **Unit tests:** the picture client with a mocked HTTP server, and the service.
+- **Repository tests** against a real SQLite file built from `schema.sql`.
+- **Integration tests:** the full app with a real SQLite file, with only the external APIs mocked.
+
+They need no network access, so they run in CI.
+
+## API
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/pictures` | **a.** Fetches random pictures and stores them. Body: `{"animal": "cat\|dog\|bear", "count": 1-10}`. Returns `201` with metadata for each saved picture. |
+| `GET` | `/api/pictures/latest` | **b.** The **latest fetched picture** (any animal), as an image |
+| `GET` | `/api/pictures/latest/metadata` | Its metadata as JSON |
+| `GET` | `/api/pictures/{animal}/last` | Latest picture of one animal, as an image |
+| `GET` | `/api/pictures/{animal}/last/metadata` | Its metadata as JSON |
+| `GET` | `/api/pictures/{id}/image` | Any stored picture by id |
+
+```bash
+# a. Fetch and store 3 dog pictures
+curl -X POST localhost:8080/api/pictures \
+  -H 'Content-Type: application/json' \
+  -d '{"animal": "dog", "count": 3}'
+
+# b. Download the latest fetched picture
+curl -o latest.jpg localhost:8080/api/pictures/latest
+curl localhost:8080/api/pictures/latest/metadata
+# {"id":6,"animalType":"DOG","contentType":"image/jpeg","sizeBytes":25134,
+#  "sourceWebsite":"place.dog","sourceUrl":"https://place.dog/484/274",
+#  "createdAt":"2026-10-19T07:17:19.572703Z","imageUrl":"/api/pictures/6/image"}
+```
+
+## Database schema
+
+The schema is in [`src/main/resources/schema.sql`](src/main/resources/schema.sql) and runs at every startup. It's idempotent (`CREATE ... IF NOT EXISTS`):
+
+```sql
+CREATE TABLE IF NOT EXISTS picture (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    animal_type    TEXT    NOT NULL CHECK (animal_type IN ('CAT', 'DOG', 'BEAR')),
+    image          BLOB    NOT NULL,   -- the picture's binary data
+    content_type   TEXT    NOT NULL,   -- e.g. image/jpeg
+    source_website TEXT    NOT NULL,   -- e.g. placebear.com
+    source_url     TEXT    NOT NULL,   -- full URL it was downloaded from
+    created_at     TEXT    NOT NULL    -- fetch timestamp, ISO-8601 UTC
+);
+CREATE INDEX IF NOT EXISTS idx_picture_created_at ON picture (created_at);
+CREATE INDEX IF NOT EXISTS idx_picture_animal_created_at ON picture (animal_type, created_at);
+```
+
+- **The SQLite file is created on the fly.** The `org.xerial:sqlite-jdbc` driver, added through Maven, bundles the native SQLite library and creates the `.db` file on first connection. The app creates the parent directory (`./data`) if it's missing.
+- **Timestamp:** SQLite has no native timestamp type, so `created_at` is stored as **fixed-width** ISO-8601 UTC text (always 9 fractional digits, e.g. `2026-10-19T07:17:19.572703000Z`). That makes plain string ordering chronological, so "latest" is `ORDER BY created_at DESC, id DESC LIMIT 1`. The `id` breaks ties.
+- **Inspecting the database:** `sqlite3 data/pictures.db "SELECT id, animal_type, source_website, created_at, length(image) FROM picture ORDER BY created_at DESC;"`
+
+## Error handling
+
+| Situation | Behaviour |
+|---|---|
+| A picture source is down, slow or returns something that isn't an image | Tries the **next source** for that animal (see below) |
+| All sources for an animal fail | `502 Bad Gateway` with the reason; **nothing is saved** |
+| Upstream too slow | 5 s connect / 10 s read timeout, then fall back or fail |
+| Partial failure in a batch (e.g. picture 3 of 5 fails) | All pictures are downloaded before anything is saved, and saving happens in one transaction, so there are no partial batches |
+| Unknown animal, `count` outside 1–10, malformed JSON | `400 Bad Request` |
+| No picture stored yet | `404 Not Found` |
+
+Errors are returned in the standard problem JSON format (RFC 9457): `{"status": 502, "title": "Bad Gateway", "detail": "..."}`.
+
+**Picture sources:**
+
+| Animal | Sources |
+|---|---|
+| Cat | [cataas.com](https://cataas.com), then [placecats.com](https://placecats.com) |
+| Dog | [place.dog](https://place.dog) |
+| Bear | [placebear.com](https://placebear.com) |
+
+- The sources are tried in order and are configurable in `application.yml` (`pictures.sources`).
+- **placekitten.com** (from the brief) is offline (HTTP 521), so cats come from cataas.com, which is on the public-apis list. cataas.com itself had an outage while I was testing, which is why cats also have a backup source.
+- place.dog and placebear return the *same* picture for the same size, so each request uses a random width and height (200–600 px) to get a random picture.
+
+## Web UI and CORS
+
+- **UI:** the Spring Boot app also serves a small web UI (`src/main/resources/static/index.html`) at `/`. Choose an animal and count, then fetch, or show the latest picture.
+- **CORS isn't needed for this UI.** It's served from the same origin as the API.
+- **CORS is configured for `/api/**`** so a UI hosted elsewhere (e.g. a React dev server) can call the API. Allowed origins come from `CORS_ALLOWED_ORIGINS`, default `http://localhost:3000,http://localhost:5173`. Requests from other origins are rejected with `403`.
+
+## Configuration
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `PORT` | `8080` | HTTP port |
+| `DB_URL` | `jdbc:sqlite:./data/pictures.db` | SQLite database location |
+| `CORS_ALLOWED_ORIGINS` | `http://localhost:3000,http://localhost:5173` | Comma-separated origins allowed to call `/api/**` |
+
+## CI/CD
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push and pull request:
+
+1. **build-and-test:** `./mvnw -B verify` on JDK 21. It uploads the test reports and the executable jar as artifacts.
+2. **docker-build:** builds the Docker image, which also runs the tests in the build stage.
+
+## Project layout
+
+```
+src/main/java/com/example/animalpictures/
+  api/        REST controller, request/response records, error handling, CORS config
+  client/     HTTP client for the picture APIs (fallback sources, timeouts)
+  domain/     Picture record, JDBC repository, SQLite directory setup
+  service/    Fetch-and-save logic (all-or-nothing batches)
+src/main/resources/
+  application.yml   configuration
+  schema.sql        database schema
+  static/index.html web UI
+```
+
+## Setting up in VS Code
+
+See **[docs/VSCODE_SETUP.md](docs/VSCODE_SETUP.md)**. It covers the JDK, extensions, Maven integration, `pom.xml`, library downloads, and running, debugging and testing.
+
+## What I'd add with more time
+
+- **Circuit breaker** (Resilience4j), so a source that's down is skipped for a while instead of waiting out the timeout on every picture.
+- **Backup sources for dogs and bears**, e.g. dog.ceo, which returns JSON with an image URL and so needs a two-step fetch.
+- **Parallel downloads** for larger `count` values (e.g. with virtual threads).
+- **Schema migrations** (Flyway) once the schema starts to change.
+- **Observability:** Spring Boot Actuator health/metrics and a Docker `HEALTHCHECK`.
+- **OpenAPI docs** (springdoc) and a paginated `GET /api/pictures` listing.
+- **A smaller image:** a jlink-trimmed JRE or a distroless base.

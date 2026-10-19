@@ -5,6 +5,7 @@ import com.example.animalpictures.client.FetchedImage;
 import com.example.animalpictures.domain.AnimalType;
 import com.example.animalpictures.domain.Picture;
 import com.example.animalpictures.domain.PictureRepository;
+import com.example.animalpictures.domain.PictureSummary;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -49,6 +50,12 @@ public class PictureService {
     @Transactional(readOnly = true)
     public Optional<Picture> findLatest(AnimalType animalType) {
         return repository.findLatestByAnimalType(animalType);
+    }
+
+    /** Most recent pictures first; {@code animalType} may be null for all animals. */
+    @Transactional(readOnly = true)
+    public List<PictureSummary> findRecent(AnimalType animalType, int limit) {
+        return repository.findRecent(animalType, limit);
     }
 
     @Transactional(readOnly = true)

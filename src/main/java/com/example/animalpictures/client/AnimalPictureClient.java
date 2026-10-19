@@ -1,8 +1,14 @@
 package com.example.animalpictures.client;
 
 import com.example.animalpictures.client.PictureSourceProperties.Source;
+import com.example.animalpictures.client.PictureSourceProperties.CircuitBreakerSettings;
 import com.example.animalpictures.domain.AnimalType;
-import java.net.URI;
+import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig.SlidingWindowType;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
@@ -24,22 +30,32 @@ public class AnimalPictureClient {
 
     private final RestClient restClient;
     private final PictureSourceProperties properties;
+    private final CircuitBreakerRegistry circuitBreakers;
 
     public AnimalPictureClient(RestClient pictureRestClient, PictureSourceProperties properties) {
         this.restClient = pictureRestClient;
         this.properties = properties;
+        this.circuitBreakers = CircuitBreakerRegistry.of(circuitBreakerConfig(properties.circuitBreaker()));
     }
 
-    /** Tries each configured source in order and returns the first image; fails only if all sources fail. */
+    /**
+     * Tries each configured source in order and returns the first image; fails only if all sources fail.
+     * Sources whose circuit breaker is open (recently failing) are skipped without being called.
+     */
     public FetchedImage fetchRandom(AnimalType animalType) {
         List<Source> sources = properties.sources().getOrDefault(animalType, List.of());
         if (sources.isEmpty()) {
             throw new PictureSourceException("No picture source configured for " + animalType);
         }
-        PictureSourceException lastFailure = null;
-        for (Source source : sources) {
+        RuntimeException lastFailure = null;
+        for (int position = 0; position < sources.size(); position++) {
+            Source source = sources.get(position);
+            CircuitBreaker breaker = breakerFor(animalType, position, source);
             try {
-                return fetchFrom(animalType, source);
+                return breaker.executeSupplier(() -> fetchFrom(animalType, source));
+            } catch (CallNotPermittedException e) {
+                log.info("{} source {} skipped: circuit open after repeated failures", animalType, breaker.getName());
+                lastFailure = new PictureSourceException(breaker.getName() + " is temporarily skipped (circuit open)");
             } catch (PictureSourceException e) {
                 log.warn("{} source failed, trying next if available: {}", animalType, e.getMessage());
                 lastFailure = e;
@@ -48,6 +64,43 @@ public class AnimalPictureClient {
         throw new PictureSourceException(
                 "All " + sources.size() + " " + animalType + " picture source(s) failed. Last error: "
                         + lastFailure.getMessage(), lastFailure);
+    }
+
+    /** Circuit-breaker state of every configured source, primary first. */
+    public List<SourceStatus> sourceStatuses() {
+        List<SourceStatus> statuses = new ArrayList<>();
+        properties.sources().forEach((animalType, sources) -> {
+            for (int position = 0; position < sources.size(); position++) {
+                Source source = sources.get(position);
+                CircuitBreaker breaker = breakerFor(animalType, position, source);
+                CircuitBreaker.Metrics metrics = breaker.getMetrics();
+                statuses.add(new SourceStatus(animalType, position, hostOf(source.url()), source.url(),
+                        breaker.getState().name(), metrics.getNumberOfBufferedCalls(), metrics.getNumberOfFailedCalls()));
+            }
+        });
+        statuses.sort((a, b) -> a.animalType() != b.animalType()
+                ? a.animalType().compareTo(b.animalType()) : Integer.compare(a.position(), b.position()));
+        return statuses;
+    }
+
+    private CircuitBreaker breakerFor(AnimalType animalType, int position, Source source) {
+        return circuitBreakers.circuitBreaker(animalType + "#" + position + " " + hostOf(source.url()));
+    }
+
+    /**
+     * Opens after {@code failureThreshold} failures in a row: a count-based window of that size with a
+     * 100% failure-rate threshold. Stays open for {@code openDuration}, then lets one trial call through.
+     */
+    private static CircuitBreakerConfig circuitBreakerConfig(CircuitBreakerSettings settings) {
+        return CircuitBreakerConfig.custom()
+                .slidingWindowType(SlidingWindowType.COUNT_BASED)
+                .slidingWindowSize(settings.failureThreshold())
+                .minimumNumberOfCalls(settings.failureThreshold())
+                .failureRateThreshold(100)
+                .waitDurationInOpenState(settings.openDuration())
+                .permittedNumberOfCallsInHalfOpenState(1)
+                .recordExceptions(PictureSourceException.class)
+                .build();
     }
 
     private FetchedImage fetchFrom(AnimalType animalType, Source source) {
@@ -103,8 +156,9 @@ public class AnimalPictureClient {
                 .toUriString();
     }
 
+    /** Host of a URL or URL template (templates may still contain placeholders like {width}). */
     static String hostOf(String url) {
-        String host = URI.create(url).getHost();
+        String host = UriComponentsBuilder.fromUriString(url).build().getHost();
         return host != null ? host : url;
     }
 

@@ -14,6 +14,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.example.animalpictures.client.AnimalPictureClient;
 import com.example.animalpictures.client.FetchedImage;
 import com.example.animalpictures.client.PictureSourceException;
+import com.example.animalpictures.client.SourceStatus;
+import java.util.List;
 import com.example.animalpictures.domain.AnimalType;
 import com.example.animalpictures.domain.PictureRepository;
 import java.nio.file.Files;
@@ -159,6 +161,19 @@ class PictureControllerIntegrationTest {
                         .header(HttpHeaders.ORIGIN, "https://evil.example")
                         .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "POST"))
                 .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void sourcesEndpointListsCircuitBreakerStates() throws Exception {
+        when(client.sourceStatuses()).thenReturn(List.of(
+                new SourceStatus(AnimalType.CAT, 0, "cataas.com", "https://cataas.com/cat", "OPEN", 2, 2),
+                new SourceStatus(AnimalType.CAT, 1, "placecats.com", "https://placecats.com/{width}/{height}", "CLOSED", 2, 0)));
+
+        mockMvc.perform(get("/api/sources"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].website").value("cataas.com"))
+                .andExpect(jsonPath("$[0].state").value("OPEN"))
+                .andExpect(jsonPath("$[1].state").value("CLOSED"));
     }
 
     private void saveOne(String animal) throws Exception {

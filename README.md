@@ -2,7 +2,7 @@
 
 A Spring Boot microservice that fetches random pictures of cats, dogs or bears from public picture APIs, stores them in an embedded **SQLite** database (image binary, timestamp, source website), and returns the latest stored picture. A simple web UI is served by the same app.
 
-**Stack:** Java 21 · Spring Boot 4.1 · Maven (wrapper included) · SQLite (`sqlite-jdbc`) · JUnit 5 / Mockito · Docker · GitHub Actions
+**Stack:** Java 21 · Spring Boot 4.1 · Maven (wrapper included) · SQLite (`sqlite-jdbc`) · Resilience4j · JUnit 5 / Mockito · Docker · GitHub Actions
 
 ## Running it
 
@@ -42,9 +42,9 @@ Then open **http://localhost:8080** for the UI.
 ./mvnw test
 ```
 
-34 tests:
+41 tests:
 
-- **Unit tests:** the picture client with a mocked HTTP server (image and JSON sources, fallback, URL rewriting), JSON Pointer lookup, and the service.
+- **Unit tests:** the picture client with a mocked HTTP server (image and JSON sources, fallback, URL rewriting, circuit breaker open / half-open / close), JSON Pointer lookup, and the service.
 - **Config test:** checks that the shipped `application.yml` gives every animal a backup source.
 - **Repository tests** against a real SQLite file built from `schema.sql`.
 - **Integration tests:** the full app with a real SQLite file, with only the external APIs mocked.
@@ -61,6 +61,7 @@ They need no network access, so they run in CI.
 | `GET` | `/api/pictures/{animal}/last` | Latest picture of one animal, as an image |
 | `GET` | `/api/pictures/{animal}/last/metadata` | Its metadata as JSON |
 | `GET` | `/api/pictures/{id}/image` | Any stored picture by id |
+| `GET` | `/api/sources` | Every picture source and its circuit-breaker state (`CLOSED` = in use, `OPEN` = temporarily skipped, `HALF_OPEN` = next call is a trial) |
 
 ```bash
 # a. Fetch and store 3 dog pictures
@@ -105,6 +106,7 @@ CREATE INDEX IF NOT EXISTS idx_picture_animal_created_at ON picture (animal_type
 | A picture source is down, slow, returns something that isn't an image, or (for JSON sources) returns no image URL | Tries the **next source** for that animal (see below) |
 | All sources for an animal fail | `502 Bad Gateway` with the reason; **nothing is saved** |
 | Upstream too slow | 5 s connect / 10 s read timeout, then fall back or fail |
+| A source keeps failing | **Circuit breaker:** after 2 failures in a row the source is skipped for 60 s, so requests go straight to the backup with no timeout wait (see below) |
 | Partial failure in a batch (e.g. picture 3 of 5 fails) | All pictures are downloaded before anything is saved, and saving happens in one transaction, so there are no partial batches |
 | Unknown animal, `count` outside 1–10, malformed JSON | `400 Bad Request` |
 | No picture stored yet | `404 Not Found` |
@@ -125,6 +127,25 @@ Errors are returned in the standard problem JSON format (RFC 9457): `{"status": 
   - **JSON sources** return JSON containing the picture's URL, so the fetch has two steps. `image-url-path` is a JSON Pointer to that URL (e.g. `/message` for dog.ceo). For iNaturalist, a random results page (`{random}`, 1–7,000) gives a random bear. `image-url-find`/`image-url-replace` swap the 75 px thumbnail for the medium-size photo, and only CC0 / CC-BY / CC-BY-SA photos are requested.
 - **`source_website`** is the host of the source that served the picture (e.g. `api.inaturalist.org`). **`source_url`** is the exact image URL that was downloaded.
 
+### Circuit breaker
+
+Each picture source has its own circuit breaker ([Resilience4j](https://resilience4j.readme.io/docs/circuitbreaker)):
+
+- **CLOSED** (normal): the source is called as usual.
+- **OPEN**: after **2 failures in a row**, the source is **skipped for 60 seconds**. Requests go straight to the next source instead of waiting out a timeout.
+- **HALF_OPEN**: after the 60 s, the next request is a **trial call**. If it succeeds the circuit closes; if it fails it opens for another 60 s.
+- **If every source for an animal is open**, the request fails immediately with `502` and doesn't wait.
+
+Measured with a dead primary (connect timeout) and the real placecats.com as backup:
+
+| Request | Time | |
+|---|---|---|
+| 1 | 6.4 s | primary times out → backup |
+| 2 | 5.9 s | primary times out → backup, **circuit opens** |
+| 3–6 | 0.25–0.47 s | primary skipped → backup immediately |
+
+Check the live state with `GET /api/sources`. Tune it with `pictures.circuit-breaker.failure-threshold` and `open-duration` in `application.yml`.
+
 ## Web UI and CORS
 
 - **UI:** the Spring Boot app also serves a small web UI (`src/main/resources/static/index.html`) at `/`. Choose an animal and count, then fetch, or show the latest picture.
@@ -139,6 +160,8 @@ Errors are returned in the standard problem JSON format (RFC 9457): `{"status": 
 | `DB_URL` | `jdbc:sqlite:./data/pictures.db` | SQLite database location |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:3000,http://localhost:5173` | Comma-separated origins allowed to call `/api/**` |
 
+Circuit-breaker settings (`pictures.circuit-breaker.failure-threshold`, default 2; `open-duration`, default 60s) and the picture sources are in `application.yml`.
+
 ## CI/CD
 
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push and pull request:
@@ -150,8 +173,8 @@ Errors are returned in the standard problem JSON format (RFC 9457): `{"status": 
 
 ```
 src/main/java/com/example/animalpictures/
-  api/        REST controller, request/response records, error handling, CORS config
-  client/     HTTP client for the picture APIs (image + JSON sources, fallback, timeouts)
+  api/        REST controllers (pictures, source status), request/response records, error handling, CORS config
+  client/     HTTP client for the picture APIs (image + JSON sources, fallback, circuit breaker, timeouts)
   domain/     Picture record, JDBC repository, SQLite directory setup
   service/    Fetch-and-save logic (all-or-nothing batches)
 src/main/resources/
@@ -166,7 +189,6 @@ See **[docs/VSCODE_SETUP.md](docs/VSCODE_SETUP.md)**. It covers the JDK, extensi
 
 ## What I'd add with more time
 
-- **Circuit breaker** (Resilience4j), so a source that's down is skipped for a while instead of waiting out the timeout on every picture.
 - **Parallel downloads** for larger `count` values (e.g. with virtual threads).
 - **Schema migrations** (Flyway) once the schema starts to change.
 - **Observability:** Spring Boot Actuator health/metrics and a Docker `HEALTHCHECK`.

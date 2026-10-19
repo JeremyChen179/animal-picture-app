@@ -25,6 +25,11 @@ app:
 pictures:
   min-size: 200
   max-size: 600
+  # Per-source circuit breaker: after N failures in a row a source is skipped for open-duration,
+  # so requests go straight to the backup instead of waiting for timeouts. Then one trial call is let through.
+  circuit-breaker:
+    failure-threshold: 2
+    open-duration: 60s
   # Tried in order per animal; the next source is used if one fails, times out or returns no image.
   # Image sources return the picture directly. JSON sources (image-url-path set) return JSON
   # containing the picture URL, which is then downloaded.

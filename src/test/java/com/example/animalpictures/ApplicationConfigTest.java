@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.example.animalpictures.client.PictureSourceProperties;
 import com.example.animalpictures.client.PictureSourceProperties.Source;
 import com.example.animalpictures.domain.AnimalType;
+import java.time.Duration;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -31,5 +32,11 @@ class ApplicationConfigTest {
         assertThat(inaturalist.imageUrlFind()).isEqualTo("/square.");
         assertThat(inaturalist.imageUrlReplace()).isEqualTo("/medium.");
         assertThat(inaturalist.randomMaxOrDefault()).isEqualTo(7000);
+    }
+
+    @Test
+    void circuitBreakerSettingsAreBoundFromYaml() {
+        assertThat(properties.circuitBreaker().failureThreshold()).isEqualTo(2);
+        assertThat(properties.circuitBreaker().openDuration()).isEqualTo(Duration.ofSeconds(60));
     }
 }

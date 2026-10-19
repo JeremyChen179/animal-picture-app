@@ -1,0 +1,12 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "java",
+      "name": "Run AnimalPictureApplication",
+      "request": "launch",
+      "mainClass": "com.example.animalpictures.AnimalPictureApplication",
+      "projectName": "animal-picture-app"
+    }
+  ]
+}

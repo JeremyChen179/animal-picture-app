@@ -5,7 +5,6 @@ import com.example.animalpictures.client.FetchedImage;
 import com.example.animalpictures.domain.AnimalType;
 import com.example.animalpictures.domain.Picture;
 import com.example.animalpictures.domain.PictureRepository;
-import java.net.URI;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -37,7 +36,7 @@ public class PictureService {
         for (int i = 0; i < count; i++) {
             FetchedImage image = client.fetchRandom(animalType);
             fetched.add(new Picture(null, animalType, image.data(), image.contentType(),
-                    websiteOf(image.sourceUrl()), image.sourceUrl(), Instant.now(clock)));
+                    image.sourceWebsite(), image.sourceUrl(), Instant.now(clock)));
         }
         return fetched.stream().map(repository::save).toList();
     }
@@ -55,10 +54,5 @@ public class PictureService {
     @Transactional(readOnly = true)
     public Optional<Picture> findById(long id) {
         return repository.findById(id);
-    }
-
-    static String websiteOf(String url) {
-        String host = URI.create(url).getHost();
-        return host != null ? host : url;
     }
 }

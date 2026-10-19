@@ -45,8 +45,8 @@ class PictureServiceTest {
     @Test
     void fetchesRequestedNumberOfPicturesAndSavesThem() {
         when(client.fetchRandom(AnimalType.DOG))
-                .thenReturn(new FetchedImage(new byte[] {1}, "image/jpeg", "https://place.dog/300/200"))
-                .thenReturn(new FetchedImage(new byte[] {2}, "image/jpeg", "https://place.dog/400/250"));
+                .thenReturn(new FetchedImage(new byte[] {1}, "image/jpeg", "https://place.dog/300/200", "place.dog"))
+                .thenReturn(new FetchedImage(new byte[] {2}, "image/jpeg", "https://place.dog/400/250", "place.dog"));
         AtomicLong ids = new AtomicLong();
         when(repository.save(any())).thenAnswer(invocation ->
                 invocation.<Picture>getArgument(0).withId(ids.incrementAndGet()));
@@ -67,7 +67,7 @@ class PictureServiceTest {
     @Test
     void savesNothingWhenAnUpstreamCallFails() {
         when(client.fetchRandom(AnimalType.CAT))
-                .thenReturn(new FetchedImage(new byte[] {1}, "image/jpeg", "https://cataas.com/cat"))
+                .thenReturn(new FetchedImage(new byte[] {1}, "image/jpeg", "https://cataas.com/cat", "cataas.com"))
                 .thenThrow(new PictureSourceException("down"));
 
         assertThatThrownBy(() -> service.fetchAndSave(AnimalType.CAT, 3)).isInstanceOf(PictureSourceException.class);
@@ -75,9 +75,4 @@ class PictureServiceTest {
         verify(repository, never()).save(any());
     }
 
-    @Test
-    void extractsWebsiteFromUrl() {
-        assertThat(PictureService.websiteOf("https://cataas.com/cat?width=300&height=200")).isEqualTo("cataas.com");
-        assertThat(PictureService.websiteOf("https://placebear.com/300/200")).isEqualTo("placebear.com");
-    }
 }

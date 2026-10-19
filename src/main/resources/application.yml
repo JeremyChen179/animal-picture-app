@@ -25,13 +25,27 @@ app:
 pictures:
   min-size: 200
   max-size: 600
-  # Tried in order per animal; the next source is used if one fails or times out.
+  # Tried in order per animal; the next source is used if one fails, times out or returns no image.
+  # Image sources return the picture directly. JSON sources (image-url-path set) return JSON
+  # containing the picture URL, which is then downloaded.
+  # Placeholders: {width}/{height} = random size, {random} = random number from 1 to random-max.
   sources:
-    # placekitten.com is offline (HTTP 521), so cats come from cataas.com, with placecats.com as backup.
     CAT:
-      - https://cataas.com/cat?width={width}&height={height}
-      - https://placecats.com/{width}/{height}
+      # placekitten.com (from the brief) is offline (HTTP 521).
+      - url: https://cataas.com/cat?width={width}&height={height}
+      - url: https://placecats.com/{width}/{height}
     DOG:
-      - https://place.dog/{width}/{height}
+      - url: https://place.dog/{width}/{height}
+      - url: https://placedog.net/{width}/{height}
+      - url: https://dog.ceo/api/breeds/image/random
+        image-url-path: /message
     BEAR:
-      - https://placebear.com/{width}/{height}
+      - url: https://placebear.com/{width}/{height}
+      # iNaturalist research-grade bear observations (taxon 41636 = Ursidae) with openly licensed
+      # photos only; a random results page gives a random bear. ~7,180 matches as of Oct 2026.
+      - url: https://api.inaturalist.org/v1/observations?taxon_id=41636&photos=true&quality_grade=research&photo_license=cc0,cc-by,cc-by-sa&per_page=1&page={random}
+        random-max: 7000
+        image-url-path: /results/0/photos/0/url
+        # The API returns a 75 px thumbnail URL; use the medium size instead.
+        image-url-find: /square.
+        image-url-replace: /medium.

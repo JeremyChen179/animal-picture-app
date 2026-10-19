@@ -60,8 +60,8 @@ class PictureControllerIntegrationTest {
     @Test
     void fetchSaveAndReturnLatestPicture() throws Exception {
         when(client.fetchRandom(AnimalType.BEAR))
-                .thenReturn(new FetchedImage(new byte[] {1}, "image/jpeg", "https://placebear.com/300/200"))
-                .thenReturn(new FetchedImage(new byte[] {2, 2}, "image/png", "https://placebear.com/400/300"));
+                .thenReturn(new FetchedImage(new byte[] {1}, "image/jpeg", "https://placebear.com/300/200", "placebear.com"))
+                .thenReturn(new FetchedImage(new byte[] {2, 2}, "image/png", "https://placebear.com/400/300", "placebear.com"));
 
         mockMvc.perform(post("/api/pictures")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -88,9 +88,9 @@ class PictureControllerIntegrationTest {
     @Test
     void latestOfAnyAnimalVersusPerAnimal() throws Exception {
         when(client.fetchRandom(AnimalType.CAT))
-                .thenReturn(new FetchedImage(new byte[] {7}, "image/jpeg", "https://cataas.com/cat"));
+                .thenReturn(new FetchedImage(new byte[] {7}, "image/jpeg", "https://cataas.com/cat", "cataas.com"));
         when(client.fetchRandom(AnimalType.DOG))
-                .thenReturn(new FetchedImage(new byte[] {8}, "image/jpeg", "https://place.dog/300/200"));
+                .thenReturn(new FetchedImage(new byte[] {8}, "image/jpeg", "https://place.dog/300/200", "place.dog"));
         saveOne("cat");
         saveOne("dog");
 

@@ -20,6 +20,7 @@
     <properties>
         <java.version>21</java.version>
         <resilience4j.version>2.4.0</resilience4j.version>
+        <archunit.version>1.5.1</archunit.version>
     </properties>
 
     <dependencies>
@@ -69,6 +70,13 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-jdbc-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- Architecture tests: enforce the clean-architecture dependency rule in CI. -->
+        <dependency>
+            <groupId>com.tngtech.archunit</groupId>
+            <artifactId>archunit</artifactId>
+            <version>${archunit.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

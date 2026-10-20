@@ -2,8 +2,8 @@ package com.example.animalpictures;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.example.animalpictures.client.PictureSourceProperties;
-import com.example.animalpictures.client.PictureSourceProperties.Source;
+import com.example.animalpictures.adapter.out.pictures.PictureSourceProperties;
+import com.example.animalpictures.adapter.out.pictures.PictureSourceProperties.Source;
 import com.example.animalpictures.domain.AnimalType;
 import java.time.Duration;
 import org.junit.jupiter.api.Test;

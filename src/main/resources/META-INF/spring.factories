@@ -1,1 +1,1 @@
-org.springframework.context.ApplicationListener=com.example.animalpictures.domain.SqliteDirectoryInitializer
+org.springframework.context.ApplicationListener=com.example.animalpictures.adapter.out.persistence.SqliteDirectoryInitializer

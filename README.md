@@ -42,9 +42,11 @@ Then open **http://localhost:8080** for the UI.
 ./mvnw test
 ```
 
-58 tests:
+81 tests:
 
-- **Unit tests:** the picture client with a mocked HTTP server (image and JSON sources, fallback, URL rewriting, circuit breaker open / half-open / close), JSON Pointer lookup, and the service.
+- **Use-case tests:** plain Java, with in-memory fakes for the ports (no Spring, no mocks), including the `count` and `limit` rules.
+- **Architecture tests** (ArchUnit): enforce the dependency rule described below, so CI fails if, for example, a use case imports Spring or the web layer calls an adapter directly.
+- **Adapter tests:** the HTTP picture source with a mocked HTTP server (image and JSON sources, fallback, URL rewriting, circuit breaker open / half-open / close), JSON Pointer lookup, and the service.
 - **Config test:** checks that the shipped `application.yml` gives every animal a backup source.
 - **Repository tests** against a real SQLite file built from `schema.sql`.
 - **Integration tests:** the full app with a real SQLite file, with only the external APIs mocked, including a test that reads aren't blocked while a slow fetch is downloading.
@@ -113,7 +115,7 @@ CREATE INDEX IF NOT EXISTS idx_picture_animal_created_at ON picture (animal_type
 | A source keeps failing | **Circuit breaker:** after 2 failures in a row the source is skipped for 60 s, so requests go straight to the backup with no timeout wait (see below) |
 | Partial failure in a batch (e.g. picture 3 of 5 fails) | All pictures are downloaded before anything is saved, and saving happens in one transaction, so there are no partial batches |
 | A slow fetch is running | Other requests aren't blocked. Downloads happen *outside* the database transaction, which only covers the short save at the end. SQLite uses a single connection, so holding it during downloads would make every other request wait and fail |
-| Unknown animal, `count` outside 1–10, malformed JSON | `400 Bad Request` |
+| Unknown animal, `count` outside 1–10 or not a JSON integer (e.g. `1.5`, `"3"`), malformed JSON | `400 Bad Request`. The use case also enforces 1–10 itself, so the rule holds for any caller, not only HTTP |
 | No picture stored yet | `404 Not Found` |
 
 Errors are returned in the standard problem JSON format (RFC 9457): `{"status": 502, "title": "Bad Gateway", "detail": "..."}`.
@@ -182,19 +184,34 @@ Circuit-breaker settings (`pictures.circuit-breaker.failure-threshold`, default 
 1. **build-and-test:** `./mvnw -B verify` on JDK 21. It uploads the test reports and the executable jar as artifacts.
 2. **docker-build:** builds the Docker image, which also runs the tests in the build stage.
 
-## Project layout
+## Architecture
+
+The code follows **clean architecture** (ports and adapters). Dependencies point **inwards only**:
+
+```
+ adapter.in.web ─┐                         ┌─ adapter.out.persistence (SQLite)
+                 ├─▶ application ─▶ domain ◀┤
+ config ─────────┘   (use cases + ports)    └─ adapter.out.pictures (HTTP APIs)
+```
 
 ```
 src/main/java/com/example/animalpictures/
-  api/        REST controllers (pictures, source status), request/response records, error handling, CORS config
-  client/     HTTP client for the picture APIs (image + JSON sources, fallback, circuit breaker, timeouts)
-  domain/     Picture record, JDBC repository, SQLite directory setup
-  service/    Fetch-and-save logic (all-or-nothing batches)
+  domain/                    AnimalType, Picture, PictureSummary. Plain Java, no framework
+  application/               Use cases: FetchPicturesUseCase, PictureQueryUseCase, SourceStatusUseCase
+    port/out/                Ports the use cases need: PictureSource, PictureStore (+ their data types)
+  adapter/in/web/            REST controllers, request/response records, error handling, CORS, strict JSON
+  adapter/out/persistence/   SqlitePictureStore implements PictureStore (JDBC, schema.sql)
+  adapter/out/pictures/      HttpPictureSource implements PictureSource (fallback, circuit breaker, limits)
+  config/                    Wires the use cases to the adapters (the only place that knows both)
 src/main/resources/
   application.yml   configuration
   schema.sql        database schema
   static/index.html web UI
 ```
+
+- **The use cases don't know about Spring, HTTP or SQL.** They only use the `PictureSource` and `PictureStore` interfaces, so they're tested with simple in-memory fakes. Swapping SQLite for another database, or adding a picture provider, means writing a new adapter without touching the use cases.
+- **The rules are enforced by tests.** `ArchitectureTest` (ArchUnit) fails the build if the domain or application layer depends on Spring or an adapter, if the web layer uses an outbound adapter directly, or if the outbound adapters depend on each other.
+- **Kept pragmatic:** one Maven module, records shared between layers where a separate mapping would add nothing, and the transaction boundary inside the persistence adapter (`saveAll`).
 
 ## Setting up in VS Code
 

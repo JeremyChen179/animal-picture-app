@@ -20,6 +20,9 @@ COPY --from=build /build/target/animal-picture-app-*.jar /app/app.jar
 
 USER app
 EXPOSE 8080
+# Lets Docker (and docker compose ps) report whether the app is actually up.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD curl -fsS http://localhost:8080/actuator/health || exit 1
 # The embedded H2 database lives in /app/data; mount a volume there to keep pictures between runs.
 VOLUME /app/data
 ENTRYPOINT ["java", "-jar", "/app/app.jar"]

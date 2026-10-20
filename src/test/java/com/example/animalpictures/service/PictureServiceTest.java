@@ -3,6 +3,7 @@ package com.example.animalpictures.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -48,8 +49,8 @@ class PictureServiceTest {
                 .thenReturn(new FetchedImage(new byte[] {1}, "image/jpeg", "https://place.dog/300/200", "place.dog"))
                 .thenReturn(new FetchedImage(new byte[] {2}, "image/jpeg", "https://place.dog/400/250", "place.dog"));
         AtomicLong ids = new AtomicLong();
-        when(repository.save(any())).thenAnswer(invocation ->
-                invocation.<Picture>getArgument(0).withId(ids.incrementAndGet()));
+        when(repository.saveAll(anyList())).thenAnswer(invocation -> invocation.<List<Picture>>getArgument(0).stream()
+                .map(picture -> picture.withId(ids.incrementAndGet())).toList());
 
         List<Picture> saved = service.fetchAndSave(AnimalType.DOG, 2);
 
@@ -72,7 +73,7 @@ class PictureServiceTest {
 
         assertThatThrownBy(() -> service.fetchAndSave(AnimalType.CAT, 3)).isInstanceOf(PictureSourceException.class);
 
-        verify(repository, never()).save(any());
+        verify(repository, never()).saveAll(anyList());
     }
 
 }

@@ -25,6 +25,9 @@ class AnimalPictureClientTest {
 
     private MockRestServiceServer server;
 
+    /** Small limit so size tests don't need big payloads. */
+    private static final org.springframework.util.unit.DataSize MAX_IMAGE_SIZE = org.springframework.util.unit.DataSize.ofBytes(100);
+
     /** Short open duration so tests can wait for the HALF_OPEN trial. */
     private static final Duration OPEN_DURATION = Duration.ofMillis(300);
 
@@ -33,7 +36,7 @@ class AnimalPictureClientTest {
         RestClient.Builder builder = RestClient.builder();
         server = MockRestServiceServer.bindTo(builder).build();
         return new AnimalPictureClient(builder.build(), new PictureSourceProperties(sources, 300, 300,
-                new CircuitBreakerSettings(2, OPEN_DURATION)));
+                new CircuitBreakerSettings(2, OPEN_DURATION), MAX_IMAGE_SIZE));
     }
 
     private AnimalPictureClient catClientWithBackup() {
@@ -102,7 +105,7 @@ class AnimalPictureClientTest {
     @Test
     void jsonSourceResolvesImageUrlThenDownloadsImage() {
         AnimalPictureClient client = clientWith(Map.of(AnimalType.DOG, List.of(
-                new Source("https://dogs.test/api/random", "/message", null, null, null))));
+                Source.json("https://dogs.test/api/random", "/message", List.of("images.dogs.test")))));
         server.expect(requestTo("https://dogs.test/api/random"))
                 .andRespond(withSuccess("{\"message\": \"https://images.dogs.test/collie.jpg\", \"status\": \"success\"}",
                         MediaType.APPLICATION_JSON));
@@ -123,7 +126,7 @@ class AnimalPictureClientTest {
         // randomMax = 1 makes {random} always 1, so the URL is predictable.
         AnimalPictureClient client = clientWith(Map.of(AnimalType.BEAR, List.of(new Source(
                 "https://bears.test/observations?per_page=1&page={random}",
-                "/results/0/photos/0/url", "/square.", "/medium.", 1))));
+                "/results/0/photos/0/url", "/square.", "/medium.", 1, List.of("photos.test")))));
         server.expect(requestTo("https://bears.test/observations?per_page=1&page=1"))
                 .andRespond(withSuccess("{\"results\": [{\"photos\": [{\"url\": \"https://photos.test/1/square.jpg\"}]}]}",
                         MediaType.APPLICATION_JSON));
@@ -137,13 +140,89 @@ class AnimalPictureClientTest {
     @Test
     void jsonSourceWithoutImageUrlFails() {
         AnimalPictureClient client = clientWith(Map.of(AnimalType.BEAR, List.of(new Source(
-                "https://bears.test/observations", "/results/0/photos/0/url", null, null, null))));
+                "https://bears.test/observations", "/results/0/photos/0/url", null, null, null, List.of("photos.test")))));
         server.expect(requestTo("https://bears.test/observations"))
                 .andRespond(withSuccess("{\"total_results\": 0, \"results\": []}", MediaType.APPLICATION_JSON));
 
         assertThatThrownBy(() -> client.fetchRandom(AnimalType.BEAR))
                 .isInstanceOf(PictureSourceException.class)
                 .hasMessageContaining("returned no image URL at /results/0/photos/0/url");
+    }
+
+    @Test
+    void jsonSourceRejectsImageUrlOnHostNotAllowed() {
+        AnimalPictureClient client = clientWith(Map.of(AnimalType.DOG, List.of(
+                Source.json("https://dogs.test/api/random", "/message", List.of("images.dogs.test")))));
+        // A compromised API pointing the app at an internal address: must not be fetched.
+        server.expect(requestTo("https://dogs.test/api/random"))
+                .andRespond(withSuccess("{\"message\": \"https://169.254.169.254/latest/meta-data\"}", MediaType.APPLICATION_JSON));
+
+        assertThatThrownBy(() -> client.fetchRandom(AnimalType.DOG))
+                .isInstanceOf(PictureSourceException.class)
+                .hasMessageContaining("host that isn't allowed");
+        server.verify(); // no request to 169.254.169.254
+    }
+
+    @Test
+    void jsonSourceRejectsPlainHttpImageUrl() {
+        AnimalPictureClient client = clientWith(Map.of(AnimalType.DOG, List.of(
+                Source.json("https://dogs.test/api/random", "/message", List.of("images.dogs.test")))));
+        server.expect(requestTo("https://dogs.test/api/random"))
+                .andRespond(withSuccess("{\"message\": \"http://images.dogs.test/collie.jpg\"}", MediaType.APPLICATION_JSON));
+
+        assertThatThrownBy(() -> client.fetchRandom(AnimalType.DOG)).hasMessageContaining("host that isn't allowed");
+        server.verify();
+    }
+
+    @Test
+    void jsonSourceWithoutAllowlistIsRejected() {
+        AnimalPictureClient client = clientWith(Map.of(AnimalType.DOG, List.of(
+                Source.json("https://dogs.test/api/random", "/message", null))));
+        server.expect(requestTo("https://dogs.test/api/random"))
+                .andRespond(withSuccess("{\"message\": \"https://images.dogs.test/collie.jpg\"}", MediaType.APPLICATION_JSON));
+
+        assertThatThrownBy(() -> client.fetchRandom(AnimalType.DOG)).hasMessageContaining("allowed: https on []");
+    }
+
+    // --- size limit ---
+
+    @Test
+    void rejectsImageLargerThanLimitByContentLength() {
+        AnimalPictureClient client = clientWith(Map.of(AnimalType.BEAR, List.of(Source.image("https://placebear.test/{width}/{height}"))));
+        org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+        headers.setContentLength(101);
+        server.expect(requestTo("https://placebear.test/300/300"))
+                .andRespond(withSuccess(new byte[101], MediaType.IMAGE_JPEG).headers(headers));
+
+        // Rejected from the Content-Length header, before the body is read.
+        assertThatThrownBy(() -> client.fetchRandom(AnimalType.BEAR))
+                .isInstanceOf(PictureSourceException.class)
+                .hasMessageContaining("image is too large (101 bytes; limit 100 bytes)");
+    }
+
+    @Test
+    void rejectsImageLargerThanLimitWithoutContentLength() {
+        AnimalPictureClient client = clientWith(Map.of(AnimalType.BEAR, List.of(Source.image("https://placebear.test/{width}/{height}"))));
+        // No Content-Length header: the limit must still be enforced while reading.
+        server.expect(requestTo("https://placebear.test/300/300")).andRespond(request -> {
+            org.springframework.mock.http.client.MockClientHttpResponse response =
+                    new org.springframework.mock.http.client.MockClientHttpResponse(new java.io.ByteArrayInputStream(new byte[500]),
+                            org.springframework.http.HttpStatus.OK);
+            response.getHeaders().setContentType(MediaType.IMAGE_JPEG);
+            return response;
+        });
+
+        assertThatThrownBy(() -> client.fetchRandom(AnimalType.BEAR))
+                .isInstanceOf(PictureSourceException.class)
+                .hasMessageContaining("image is too large (more than 100 bytes");
+    }
+
+    @Test
+    void acceptsImageExactlyAtLimit() {
+        AnimalPictureClient client = clientWith(Map.of(AnimalType.BEAR, List.of(Source.image("https://placebear.test/{width}/{height}"))));
+        server.expect(requestTo("https://placebear.test/300/300")).andRespond(withSuccess(new byte[100], MediaType.IMAGE_JPEG));
+
+        assertThat(client.fetchRandom(AnimalType.BEAR).data()).hasSize(100);
     }
 
     // --- fallback ---
@@ -164,7 +243,7 @@ class AnimalPictureClientTest {
     void fallsBackFromImageSourceToJsonSource() {
         AnimalPictureClient client = clientWith(Map.of(AnimalType.DOG, List.of(
                 Source.image("https://dogs-primary.test/{width}/{height}"),
-                new Source("https://dogs-api.test/random", "/message", null, null, null))));
+                Source.json("https://dogs-api.test/random", "/message", List.of("img.test")))));
         server.expect(requestTo("https://dogs-primary.test/300/300")).andRespond(withServerError());
         server.expect(requestTo("https://dogs-api.test/random"))
                 .andRespond(withSuccess("{\"message\": \"https://img.test/d.jpg\"}", MediaType.APPLICATION_JSON));

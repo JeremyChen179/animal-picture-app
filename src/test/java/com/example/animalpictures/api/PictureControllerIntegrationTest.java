@@ -215,6 +215,28 @@ class PictureControllerIntegrationTest {
     }
 
     @Test
+    void saveAllIsAtomicWhenOneInsertFails() {
+        java.time.Instant now = java.time.Instant.parse("2026-10-20T10:00:00Z");
+        com.example.animalpictures.domain.Picture valid = new com.example.animalpictures.domain.Picture(
+                null, AnimalType.CAT, new byte[] {1}, "image/jpeg", "cataas.com", "https://cataas.com/cat", now);
+        // content_type is NOT NULL in schema.sql, so this insert fails after the first one succeeded.
+        com.example.animalpictures.domain.Picture invalid = new com.example.animalpictures.domain.Picture(
+                null, AnimalType.CAT, new byte[] {2}, null, "cataas.com", "https://cataas.com/cat", now);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> repository.saveAll(List.of(valid, invalid)))
+                .isInstanceOf(org.springframework.dao.DataAccessException.class);
+        assertThat(repository.count()).isZero(); // the first insert was rolled back
+    }
+
+    @Test
+    void healthEndpointIsUpAndOtherActuatorEndpointsAreHidden() throws Exception {
+        mockMvc.perform(get("/actuator/health"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("UP"));
+        mockMvc.perform(get("/actuator/env")).andExpect(status().isNotFound());
+    }
+
+    @Test
     void sourcesEndpointListsCircuitBreakerStates() throws Exception {
         when(client.sourceStatuses()).thenReturn(List.of(
                 new SourceStatus(AnimalType.CAT, 0, "cataas.com", "https://cataas.com/cat", "OPEN", 2, 2),

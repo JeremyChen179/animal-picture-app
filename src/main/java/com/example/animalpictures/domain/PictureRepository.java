@@ -10,6 +10,7 @@ import java.util.Optional;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 /** Plain-JDBC access to the {@code picture} table defined in {@code schema.sql}. */
 @Repository
@@ -47,6 +48,12 @@ public class PictureRepository {
                 .query(Long.class)
                 .single();
         return picture.withId(id);
+    }
+
+    /** Saves all pictures in one short transaction: either all are stored or none. */
+    @Transactional
+    public List<Picture> saveAll(List<Picture> pictures) {
+        return pictures.stream().map(this::save).toList();
     }
 
     /** Latest picture of any animal. The id breaks ties between pictures with the same timestamp. */

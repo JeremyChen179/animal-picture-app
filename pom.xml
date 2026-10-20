@@ -39,6 +39,11 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
+        <!-- /actuator/health for Docker and monitoring (only the health endpoint is exposed over HTTP). -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
         <!-- Circuit breaker per picture source (core module only; no Spring integration needed). -->
         <dependency>
             <groupId>io.github.resilience4j</groupId>

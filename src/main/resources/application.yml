@@ -16,6 +16,13 @@ spring:
       # Run schema.sql on every start (it only uses CREATE ... IF NOT EXISTS).
       mode: always
 
+management:
+  endpoints:
+    web:
+      exposure:
+        # Only the health endpoint over HTTP (also Spring Boot's default); details stay hidden.
+        include: health
+
 app:
   cors:
     # Origins allowed to call /api/** from a browser, for a UI hosted elsewhere.
@@ -30,10 +37,14 @@ pictures:
   circuit-breaker:
     failure-threshold: 2
     open-duration: 60s
+  # Larger downloads are aborted (checked against Content-Length and while reading).
+  max-image-size: 10MB
   # Tried in order per animal; the next source is used if one fails, times out or returns no image.
   # Image sources return the picture directly. JSON sources (image-url-path set) return JSON
   # containing the picture URL, which is then downloaded.
   # Placeholders: {width}/{height} = random size, {random} = random number from 1 to random-max.
+  # JSON sources must list allowed-image-hosts: the image URL comes from a third party, so it may
+  # only point to these https hosts.
   sources:
     CAT:
       # placekitten.com (from the brief) is offline (HTTP 521).
@@ -44,6 +55,7 @@ pictures:
       - url: https://placedog.net/{width}/{height}
       - url: https://dog.ceo/api/breeds/image/random
         image-url-path: /message
+        allowed-image-hosts: [images.dog.ceo]
     BEAR:
       - url: https://placebear.com/{width}/{height}
       # iNaturalist research-grade bear observations (taxon 41636 = Ursidae) with openly licensed
@@ -54,3 +66,4 @@ pictures:
         # The API returns a 75 px thumbnail URL; use the medium size instead.
         image-url-find: /square.
         image-url-replace: /medium.
+        allowed-image-hosts: [inaturalist-open-data.s3.amazonaws.com, static.inaturalist.org]

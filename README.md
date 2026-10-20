@@ -42,12 +42,12 @@ Then open **http://localhost:8080** for the UI.
 ./mvnw test
 ```
 
-47 tests:
+58 tests:
 
 - **Unit tests:** the picture client with a mocked HTTP server (image and JSON sources, fallback, URL rewriting, circuit breaker open / half-open / close), JSON Pointer lookup, and the service.
 - **Config test:** checks that the shipped `application.yml` gives every animal a backup source.
 - **Repository tests** against a real SQLite file built from `schema.sql`.
-- **Integration tests:** the full app with a real SQLite file, with only the external APIs mocked.
+- **Integration tests:** the full app with a real SQLite file, with only the external APIs mocked, including a test that reads aren't blocked while a slow fetch is downloading.
 
 They need no network access, so they run in CI.
 
@@ -62,6 +62,7 @@ They need no network access, so they run in CI.
 | `GET` | `/api/pictures/{animal}/last` | Latest picture of one animal, as an image |
 | `GET` | `/api/pictures/{animal}/last/metadata` | Its metadata as JSON |
 | `GET` | `/api/pictures/{id}/image` | Any stored picture by id |
+| `GET` | `/actuator/health` | Health check (`{"status":"UP"}`), used by the Docker `HEALTHCHECK` |
 | `GET` | `/api/sources` | Every picture source and its circuit-breaker state (`CLOSED` = in use, `OPEN` = temporarily skipped, `HALF_OPEN` = next call is a trial) |
 
 ```bash
@@ -107,8 +108,11 @@ CREATE INDEX IF NOT EXISTS idx_picture_animal_created_at ON picture (animal_type
 | A picture source is down, slow, returns something that isn't an image, or (for JSON sources) returns no image URL | Tries the **next source** for that animal (see below) |
 | All sources for an animal fail | `502 Bad Gateway` with the reason; **nothing is saved** |
 | Upstream too slow | 5 s connect / 10 s read timeout, then fall back or fail |
+| Image larger than 10 MB | Rejected without reading it all into memory. The size is checked against `Content-Length` and again while reading |
+| A JSON source returns an image URL that isn't `https` or isn't on its allowed hosts | Rejected, so a compromised API can't make the app fetch other (e.g. internal) addresses |
 | A source keeps failing | **Circuit breaker:** after 2 failures in a row the source is skipped for 60 s, so requests go straight to the backup with no timeout wait (see below) |
 | Partial failure in a batch (e.g. picture 3 of 5 fails) | All pictures are downloaded before anything is saved, and saving happens in one transaction, so there are no partial batches |
+| A slow fetch is running | Other requests aren't blocked. Downloads happen *outside* the database transaction, which only covers the short save at the end. SQLite uses a single connection, so holding it during downloads would make every other request wait and fail |
 | Unknown animal, `count` outside 1–10, malformed JSON | `400 Bad Request` |
 | No picture stored yet | `404 Not Found` |
 
@@ -125,7 +129,7 @@ Errors are returned in the standard problem JSON format (RFC 9457): `{"status": 
 - **placekitten.com** (from the brief) is offline (HTTP 521), so cats come from cataas.com, which is on the public-apis list. cataas.com itself went down several times while I was testing (timeouts of 10–40 s), which is why every animal now has a backup.
 - **Two kinds of source**, both configured in `application.yml` under `pictures.sources`:
   - **Image sources** return the picture directly, e.g. `https://placebear.com/{width}/{height}`. place.dog, placedog.net and placebear return the *same* picture for the same size, so each request uses a random width and height (200–600 px).
-  - **JSON sources** return JSON containing the picture's URL, so the fetch has two steps. `image-url-path` is a JSON Pointer to that URL (e.g. `/message` for dog.ceo). For iNaturalist, a random results page (`{random}`, 1–7,000) gives a random bear. `image-url-find`/`image-url-replace` swap the 75 px thumbnail for the medium-size photo, and only CC0 / CC-BY / CC-BY-SA photos are requested.
+  - **JSON sources** return JSON containing the picture's URL, so the fetch has two steps. Each one must list `allowed-image-hosts`; the extracted URL has to be `https` on one of them. `image-url-path` is a JSON Pointer to that URL (e.g. `/message` for dog.ceo). For iNaturalist, a random results page (`{random}`, 1–7,000) gives a random bear. `image-url-find`/`image-url-replace` swap the 75 px thumbnail for the medium-size photo, and only CC0 / CC-BY / CC-BY-SA photos are requested.
 - **`source_website`** is the host of the source that served the picture (e.g. `api.inaturalist.org`). **`source_url`** is the exact image URL that was downloaded.
 
 ### Circuit breaker
@@ -169,7 +173,7 @@ Check the live state with `GET /api/sources`. Tune it with `pictures.circuit-bre
 | `DB_URL` | `jdbc:sqlite:./data/pictures.db` | SQLite database location |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:3000,http://localhost:5173` | Comma-separated origins allowed to call `/api/**` |
 
-Circuit-breaker settings (`pictures.circuit-breaker.failure-threshold`, default 2; `open-duration`, default 60s) and the picture sources are in `application.yml`.
+Circuit-breaker settings (`pictures.circuit-breaker.failure-threshold`, default 2; `open-duration`, default 60s), the image size limit (`pictures.max-image-size`, default 10MB) and the picture sources are in `application.yml`.
 
 ## CI/CD
 
@@ -200,6 +204,6 @@ See **[docs/VSCODE_SETUP.md](docs/VSCODE_SETUP.md)**. It covers the JDK, extensi
 
 - **Parallel downloads** for larger `count` values (e.g. with virtual threads).
 - **Schema migrations** (Flyway) once the schema starts to change.
-- **Observability:** Spring Boot Actuator health/metrics and a Docker `HEALTHCHECK`.
+- **Metrics:** expose Actuator metrics (e.g. Prometheus) for request rates and source failures.
 - **OpenAPI docs** (springdoc) and a paginated `GET /api/pictures` listing.
 - **A smaller image:** a jlink-trimmed JRE or a distroless base.

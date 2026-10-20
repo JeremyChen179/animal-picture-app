@@ -30,8 +30,10 @@ public class PictureService {
     /**
      * Downloads {@code count} pictures first and only then saves them in one transaction, so a failing
      * upstream call doesn't leave a partial batch in the database.
+     *
+     * <p>Deliberately not {@code @Transactional}: downloads can take many seconds, and holding the
+     * (single) SQLite connection during them would block every other request that needs the database.
      */
-    @Transactional
     public List<Picture> fetchAndSave(AnimalType animalType, int count) {
         List<Picture> fetched = new ArrayList<>(count);
         for (int i = 0; i < count; i++) {
@@ -39,7 +41,7 @@ public class PictureService {
             fetched.add(new Picture(null, animalType, image.data(), image.contentType(),
                     image.sourceWebsite(), image.sourceUrl(), Instant.now(clock)));
         }
-        return fetched.stream().map(repository::save).toList();
+        return repository.saveAll(fetched);
     }
 
     @Transactional(readOnly = true)

@@ -35,6 +35,17 @@ class ApplicationConfigTest {
     }
 
     @Test
+    void everyJsonSourceHasAnImageHostAllowlist() {
+        properties.sources().forEach((animal, sources) -> sources.stream().filter(Source::isJson).forEach(source ->
+                assertThat(source.allowedImageHosts()).as(animal + " " + source.url()).isNotEmpty()));
+    }
+
+    @Test
+    void maxImageSizeIsBoundFromYaml() {
+        assertThat(properties.maxImageSize()).isEqualTo(org.springframework.util.unit.DataSize.ofMegabytes(10));
+    }
+
+    @Test
     void circuitBreakerSettingsAreBoundFromYaml() {
         assertThat(properties.circuitBreaker().failureThreshold()).isEqualTo(2);
         assertThat(properties.circuitBreaker().openDuration()).isEqualTo(Duration.ofSeconds(60));

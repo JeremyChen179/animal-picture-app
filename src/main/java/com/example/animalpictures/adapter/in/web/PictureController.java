@@ -2,6 +2,7 @@ package com.example.animalpictures.adapter.in.web;
 
 import com.example.animalpictures.domain.AnimalType;
 import com.example.animalpictures.domain.Picture;
+import com.example.animalpictures.domain.PictureId;
 import com.example.animalpictures.application.FetchPicturesUseCase;
 import com.example.animalpictures.application.PictureQueryUseCase;
 import jakarta.validation.Valid;
@@ -79,16 +80,18 @@ public class PictureController {
                 .orElseThrow(() -> new PictureNotFoundException("No " + animal + " picture stored yet"));
     }
 
-    @GetMapping("/{id:\\d+}/image")
-    public ResponseEntity<byte[]> imageById(@PathVariable long id) {
-        return image(pictureQueries.findById(id)
-                .orElseThrow(() -> new PictureNotFoundException("Picture " + id + " not found")));
+    /** Any stored picture by its id (a UUID). An id that isn't a valid UUID is a 400. */
+    @GetMapping("/{id}/image")
+    public ResponseEntity<byte[]> imageById(@PathVariable String id) {
+        PictureId pictureId = PictureId.of(id);
+        return image(pictureQueries.findById(pictureId)
+                .orElseThrow(() -> new PictureNotFoundException("Picture " + pictureId + " not found")));
     }
 
     private static ResponseEntity<byte[]> image(Picture picture) {
         return ResponseEntity.ok()
-                .contentType(MediaType.parseMediaType(picture.contentType()))
-                .header("X-Picture-Id", String.valueOf(picture.id()))
-                .body(picture.image());
+                .contentType(MediaType.parseMediaType(picture.image().contentType()))
+                .header("X-Picture-Id", picture.id().toString())
+                .body(picture.image().bytes());
     }
 }

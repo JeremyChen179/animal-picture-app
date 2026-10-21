@@ -42,13 +42,14 @@ Then open **http://localhost:8080** for the UI.
 ./mvnw test
 ```
 
-81 tests:
+103 tests:
 
 - **Use-case tests:** plain Java, with in-memory fakes for the ports (no Spring, no mocks), including the `count` and `limit` rules.
 - **Architecture tests** (ArchUnit): enforce the dependency rule described below, so CI fails if, for example, a use case imports Spring or the web layer calls an adapter directly.
 - **Adapter tests:** the HTTP picture source with a mocked HTTP server (image and JSON sources, fallback, URL rewriting, circuit breaker open / half-open / close), JSON Pointer lookup, and the service.
 - **Config test:** checks that the shipped `application.yml` gives every animal a backup source.
-- **Repository tests** against a real SQLite file built from `schema.sql`.
+- **Domain tests:** `Picture` identity and equality, and the `PictureId`, `Image` and `ImageOrigin` value objects.
+- **Repository and migration tests** against real SQLite files created by the Flyway migrations, including upgrading a database from the previous schema.
 - **Integration tests:** the full app with a real SQLite file, with only the external APIs mocked, including a test that reads aren't blocked while a slow fetch is downloading.
 
 They need no network access, so they run in CI.
@@ -63,7 +64,7 @@ They need no network access, so they run in CI.
 | `GET` | `/api/pictures/latest/metadata` | Its metadata as JSON |
 | `GET` | `/api/pictures/{animal}/last` | Latest picture of one animal, as an image |
 | `GET` | `/api/pictures/{animal}/last/metadata` | Its metadata as JSON |
-| `GET` | `/api/pictures/{id}/image` | Any stored picture by id |
+| `GET` | `/api/pictures/{id}/image` | Any stored picture by its id (a UUID). An invalid id gives `400`, an unknown one `404` |
 | `GET` | `/actuator/health` | Health check (`{"status":"UP"}`), used by the Docker `HEALTHCHECK` |
 | `GET` | `/api/sources` | Every picture source and its circuit-breaker state (`CLOSED` = in use, `OPEN` = temporarily skipped, `HALF_OPEN` = next call is a trial) |
 
@@ -76,18 +77,26 @@ curl -X POST localhost:8080/api/pictures \
 # b. Download the latest fetched picture
 curl -o latest.jpg localhost:8080/api/pictures/latest
 curl localhost:8080/api/pictures/latest/metadata
-# {"id":6,"animalType":"DOG","contentType":"image/jpeg","sizeBytes":25134,
-#  "sourceWebsite":"place.dog","sourceUrl":"https://place.dog/484/274",
-#  "createdAt":"2026-10-19T07:17:19.572703Z","imageUrl":"/api/pictures/6/image"}
+# {"id":"aefe3889-cfe7-4cf9-a54e-caa0ffe404b2","animalType":"BEAR","contentType":"image/jpeg",
+#  "sizeBytes":25134,"sourceWebsite":"placebear.com","sourceUrl":"https://placebear.com/484/274",
+#  "createdAt":"2026-10-22T09:40:14.572703Z","imageUrl":"/api/pictures/aefe3889-cfe7-4cf9-a54e-caa0ffe404b2/image"}
 ```
 
 ## Database schema
 
-The schema is in [`src/main/resources/schema.sql`](src/main/resources/schema.sql) and runs at every startup. It's idempotent (`CREATE ... IF NOT EXISTS`):
+The schema is managed by **Flyway** migrations in [`src/main/resources/db/migration`](src/main/resources/db/migration), which run at startup:
+
+| Migration | Change |
+|---|---|
+| `V1__create_picture_table.sql` | The original table |
+| `V2__add_domain_picture_id.sql` | Adds `picture_id`, the picture's domain id (UUID), and gives existing rows one |
+
+The resulting table:
 
 ```sql
-CREATE TABLE IF NOT EXISTS picture (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+CREATE TABLE picture (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT, -- internal row id: never leaves the persistence adapter
+    picture_id     TEXT    NOT NULL UNIQUE,           -- the picture's domain id (PictureId, a UUID)
     animal_type    TEXT    NOT NULL CHECK (animal_type IN ('CAT', 'DOG', 'BEAR')),
     image          BLOB    NOT NULL,   -- the picture's binary data
     content_type   TEXT    NOT NULL,   -- e.g. image/jpeg
@@ -95,13 +104,15 @@ CREATE TABLE IF NOT EXISTS picture (
     source_url     TEXT    NOT NULL,   -- full URL it was downloaded from
     created_at     TEXT    NOT NULL    -- fetch timestamp, ISO-8601 UTC
 );
-CREATE INDEX IF NOT EXISTS idx_picture_created_at ON picture (created_at);
-CREATE INDEX IF NOT EXISTS idx_picture_animal_created_at ON picture (animal_type, created_at);
+CREATE INDEX idx_picture_created_at ON picture (created_at);
+CREATE INDEX idx_picture_animal_created_at ON picture (animal_type, created_at);
 ```
 
+- **Two ids, two owners.** `picture_id` is the domain's id: assigned by the application when a picture is fetched, and the id used in the API. `id` is the database's own row id. It's only used inside `SqlitePictureRepository`, as an insertion-order tie-breaker when sorting; no other class can see it.
+- **Upgrading older databases:** a database created before Flyway was added (old schema, no history table) is baselined at V1, and then only V2 runs. Existing pictures keep their data and get a UUID. Tested with a database created by the previous version.
 - **The SQLite file is created on the fly.** The `org.xerial:sqlite-jdbc` driver, added through Maven, bundles the native SQLite library and creates the `.db` file on first connection. The app creates the parent directory (`./data`) if it's missing.
-- **Timestamp:** SQLite has no native timestamp type, so `created_at` is stored as **fixed-width** ISO-8601 UTC text (always 9 fractional digits, e.g. `2026-10-19T07:17:19.572703000Z`). That makes plain string ordering chronological, so "latest" is `ORDER BY created_at DESC, id DESC LIMIT 1`. The `id` breaks ties.
-- **Inspecting the database:** `sqlite3 data/pictures.db "SELECT id, animal_type, source_website, created_at, length(image) FROM picture ORDER BY created_at DESC;"`
+- **Timestamp:** SQLite has no native timestamp type, so `created_at` is stored as **fixed-width** ISO-8601 UTC text (always 9 fractional digits, e.g. `2026-10-19T07:17:19.572703000Z`). That makes plain string ordering chronological, so "latest" is `ORDER BY created_at DESC, id DESC LIMIT 1`.
+- **Inspecting the database:** `sqlite3 data/pictures.db "SELECT picture_id, animal_type, source_website, created_at, length(image) FROM picture ORDER BY created_at DESC;"`
 
 ## Error handling
 
@@ -196,21 +207,32 @@ The code follows **clean architecture** (ports and adapters). Dependencies point
 
 ```
 src/main/java/com/example/animalpictures/
-  domain/                    AnimalType, Picture, PictureSummary. Plain Java, no framework
+  domain/                    Picture (entity), PictureId, Image, ImageOrigin (value objects), AnimalType,
+                             PictureRepository (repository interface), PictureSummary. Plain Java
   application/               Use cases: FetchPicturesUseCase, PictureQueryUseCase, SourceStatusUseCase
-    port/out/                Ports the use cases need: PictureSource, PictureStore (+ their data types)
+    port/out/                PictureSource: where pictures come from (+ its data types)
   adapter/in/web/            REST controllers, request/response records, error handling, CORS, strict JSON
-  adapter/out/persistence/   SqlitePictureStore implements PictureStore (JDBC, schema.sql)
+  adapter/out/persistence/   SqlitePictureRepository implements PictureRepository (JDBC)
   adapter/out/pictures/      HttpPictureSource implements PictureSource (fallback, circuit breaker, limits)
   config/                    Wires the use cases to the adapters (the only place that knows both)
 src/main/resources/
   application.yml   configuration
-  schema.sql        database schema
+  db/migration/     database migrations (Flyway)
   static/index.html web UI
 ```
 
-- **The use cases don't know about Spring, HTTP or SQL.** They only use the `PictureSource` and `PictureStore` interfaces, so they're tested with simple in-memory fakes. Swapping SQLite for another database, or adding a picture provider, means writing a new adapter without touching the use cases.
+- **The use cases don't know about Spring, HTTP or SQL.** They only use the `PictureSource` and `PictureRepository` interfaces, so they're tested with simple in-memory fakes. Swapping SQLite for another database, or adding a picture provider, means writing a new adapter without touching the use cases.
 - **The rules are enforced by tests.** `ArchitectureTest` (ArchUnit) fails the build if the domain or application layer depends on Spring or an adapter, if the web layer uses an outbound adapter directly, or if the outbound adapters depend on each other.
+### Domain model (DDD)
+
+- **`Picture` is an entity, and the aggregate root.** Its identity is a `PictureId` (a UUID) **assigned by the domain** when the picture is fetched (`Picture.fetch(...)`), not by the database. A picture is complete, id included, before it's stored, and storing it doesn't change it. Repositories rebuild stored pictures with `Picture.restore(...)`. Two pictures are equal only if their ids are equal.
+- **Value objects** make invalid states impossible:
+  - **`Image`:** non-empty bytes with an `image/*` type; the bytes are copied in and out, so it can't be changed after creation.
+  - **`ImageOrigin`:** source website and URL.
+  - **`PictureId`:** only the canonical UUID form is accepted.
+- **`PictureRepository` lives in the domain.** It's the collection of pictures, expressed in domain terms (`findById(PictureId)`, `findLatest()`…). The SQLite adapter implements it, and the database's row id stays inside that adapter.
+- **Enforced by `ArchitectureTest`:** the repository interface must be in the domain, and nothing outside the persistence adapter may depend on it.
+
 - **Kept pragmatic:** one Maven module, records shared between layers where a separate mapping would add nothing, and the transaction boundary inside the persistence adapter (`saveAll`).
 
 ## Setting up in VS Code
@@ -220,7 +242,6 @@ See **[docs/VSCODE_SETUP.md](docs/VSCODE_SETUP.md)**. It covers the JDK, extensi
 ## What I'd add with more time
 
 - **Parallel downloads** for larger `count` values (e.g. with virtual threads).
-- **Schema migrations** (Flyway) once the schema starts to change.
 - **Metrics:** expose Actuator metrics (e.g. Prometheus) for request rates and source failures.
 - **OpenAPI docs** (springdoc) and a paginated `GET /api/pictures` listing.
 - **A smaller image:** a jlink-trimmed JRE or a distroless base.

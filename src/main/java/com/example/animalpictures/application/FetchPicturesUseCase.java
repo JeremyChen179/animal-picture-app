@@ -2,9 +2,9 @@ package com.example.animalpictures.application;
 
 import com.example.animalpictures.application.port.out.FetchedImage;
 import com.example.animalpictures.application.port.out.PictureSource;
-import com.example.animalpictures.application.port.out.PictureStore;
 import com.example.animalpictures.domain.AnimalType;
 import com.example.animalpictures.domain.Picture;
+import com.example.animalpictures.domain.PictureRepository;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -14,9 +14,10 @@ import java.util.Objects;
 /**
  * Use case a: fetch {@code count} random pictures of an animal and store them.
  *
- * <p>All pictures are downloaded first and only then saved, atomically, so a failing source never
- * leaves a partial batch. Downloads deliberately happen outside any database transaction: they can
- * take many seconds and must not hold the database connection.
+ * <p>Each picture gets its identity from the domain ({@link Picture#fetch}) when it's created, so the
+ * returned pictures are complete before and after storing. All pictures are downloaded first and
+ * only then stored, atomically, so a failing source never leaves a partial batch. Downloads happen
+ * outside any database transaction: they can take many seconds and must not hold the connection.
  */
 public class FetchPicturesUseCase {
 
@@ -24,12 +25,12 @@ public class FetchPicturesUseCase {
     public static final int MAX_COUNT = 10;
 
     private final PictureSource pictureSource;
-    private final PictureStore pictureStore;
+    private final PictureRepository pictureRepository;
     private final Clock clock;
 
-    public FetchPicturesUseCase(PictureSource pictureSource, PictureStore pictureStore, Clock clock) {
+    public FetchPicturesUseCase(PictureSource pictureSource, PictureRepository pictureRepository, Clock clock) {
         this.pictureSource = pictureSource;
-        this.pictureStore = pictureStore;
+        this.pictureRepository = pictureRepository;
         this.clock = clock;
     }
 
@@ -41,12 +42,12 @@ public class FetchPicturesUseCase {
             throw new IllegalArgumentException(
                     "count must be between " + MIN_COUNT + " and " + MAX_COUNT + ", was " + count);
         }
-        List<Picture> fetched = new ArrayList<>(count);
+        List<Picture> pictures = new ArrayList<>(count);
         for (int i = 0; i < count; i++) {
-            FetchedImage image = pictureSource.fetchRandom(animalType);
-            fetched.add(new Picture(null, animalType, image.data(), image.contentType(),
-                    image.sourceWebsite(), image.sourceUrl(), Instant.now(clock)));
+            FetchedImage fetched = pictureSource.fetchRandom(animalType);
+            pictures.add(Picture.fetch(animalType, fetched.image(), fetched.origin(), Instant.now(clock)));
         }
-        return pictureStore.saveAll(fetched);
+        pictureRepository.saveAll(pictures);
+        return List.copyOf(pictures);
     }
 }

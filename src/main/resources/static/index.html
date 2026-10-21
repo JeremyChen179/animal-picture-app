@@ -100,8 +100,11 @@
       }));
     }
 
+    // Picture ids are UUIDs; the first 8 characters are enough to tell pictures apart on screen.
+    const shortId = id => id.slice(0, 8);
+
     function caption(picture) {
-      return '#' + picture.id + ' ' + picture.animalType.toLowerCase() + ' · ' + picture.sourceWebsite
+      return '#' + shortId(picture.id) + ' ' + picture.animalType.toLowerCase() + ' · ' + picture.sourceWebsite
         + ' · ' + new Date(picture.createdAt).toLocaleString();
     }
 
@@ -120,7 +123,7 @@
       } else {
         const saved = await response.json();
         setStatus('Saved ' + saved.length + ' picture(s) from ' + [...new Set(saved.map(p => p.sourceWebsite))].join(', ')
-          + ': ids ' + saved.map(p => p.id).join(', '));
+          + ': ids ' + saved.map(p => shortId(p.id)).join(', '));
         showResult(saved.map(p => p.imageUrl));
       }
       // Refresh both panels either way: a failure may have opened a circuit breaker.

@@ -52,6 +52,22 @@ class ArchitectureTest {
                 .check(CLASSES);
     }
 
+    /** The database (and its row ids) stays behind the domain's PictureRepository interface. */
+    @Test
+    void persistenceAdapterIsOnlyReachedThroughTheRepositoryInterface() {
+        noClasses().that().resideOutsideOfPackage(BASE + ".adapter.out.persistence..")
+                .should().dependOnClassesThat().resideInAPackage(BASE + ".adapter.out.persistence..")
+                .check(CLASSES);
+    }
+
+    @Test
+    void repositoryInterfaceBelongsToTheDomain() {
+        classes().that().haveSimpleName("PictureRepository")
+                .should().resideInAPackage(BASE + ".domain")
+                .andShould().beInterfaces()
+                .check(CLASSES);
+    }
+
     @Test
     void onlyConfigWiresUseCasesToAdapters() {
         noClasses().that().resideOutsideOfPackages(BASE + ".config..", BASE + ".adapter..")

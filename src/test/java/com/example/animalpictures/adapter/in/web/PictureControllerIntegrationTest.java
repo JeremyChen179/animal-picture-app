@@ -17,7 +17,11 @@ import com.example.animalpictures.application.port.out.PictureSourceException;
 import com.example.animalpictures.application.port.out.SourceStatus;
 import java.util.List;
 import com.example.animalpictures.domain.AnimalType;
-import com.example.animalpictures.adapter.out.persistence.SqlitePictureStore;
+import com.example.animalpictures.domain.Picture;
+import com.example.animalpictures.domain.PictureId;
+import com.example.animalpictures.domain.Image;
+import com.example.animalpictures.domain.ImageOrigin;
+import com.example.animalpictures.adapter.out.persistence.SqlitePictureRepository;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import org.junit.jupiter.api.BeforeEach;
@@ -44,7 +48,7 @@ class PictureControllerIntegrationTest {
     @Autowired
     private MockMvc mockMvc;
     @Autowired
-    private SqlitePictureStore repository;
+    private SqlitePictureRepository repository;
 
     @MockitoBean
     private PictureSource client;
@@ -62,8 +66,8 @@ class PictureControllerIntegrationTest {
     @Test
     void fetchSaveAndReturnLatestPicture() throws Exception {
         when(client.fetchRandom(AnimalType.BEAR))
-                .thenReturn(new FetchedImage(new byte[] {1}, "image/jpeg", "https://placebear.com/300/200", "placebear.com"))
-                .thenReturn(new FetchedImage(new byte[] {2, 2}, "image/png", "https://placebear.com/400/300", "placebear.com"));
+                .thenReturn(new FetchedImage(new Image(new byte[] {1}, "image/jpeg"), new ImageOrigin("placebear.com", "https://placebear.com/300/200")))
+                .thenReturn(new FetchedImage(new Image(new byte[] {2, 2}, "image/png"), new ImageOrigin("placebear.com", "https://placebear.com/400/300")));
 
         mockMvc.perform(post("/api/pictures")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -90,9 +94,9 @@ class PictureControllerIntegrationTest {
     @Test
     void latestOfAnyAnimalVersusPerAnimal() throws Exception {
         when(client.fetchRandom(AnimalType.CAT))
-                .thenReturn(new FetchedImage(new byte[] {7}, "image/jpeg", "https://cataas.com/cat", "cataas.com"));
+                .thenReturn(new FetchedImage(new Image(new byte[] {7}, "image/jpeg"), new ImageOrigin("cataas.com", "https://cataas.com/cat")));
         when(client.fetchRandom(AnimalType.DOG))
-                .thenReturn(new FetchedImage(new byte[] {8}, "image/jpeg", "https://place.dog/300/200", "place.dog"));
+                .thenReturn(new FetchedImage(new Image(new byte[] {8}, "image/jpeg"), new ImageOrigin("place.dog", "https://place.dog/300/200")));
         saveOne("cat");
         saveOne("dog");
 
@@ -176,9 +180,9 @@ class PictureControllerIntegrationTest {
     @Test
     void listsRecentPicturesNewestFirstWithFilterAndLimit() throws Exception {
         when(client.fetchRandom(AnimalType.CAT))
-                .thenReturn(new FetchedImage(new byte[] {1}, "image/jpeg", "https://cataas.com/cat", "cataas.com"));
+                .thenReturn(new FetchedImage(new Image(new byte[] {1}, "image/jpeg"), new ImageOrigin("cataas.com", "https://cataas.com/cat")));
         when(client.fetchRandom(AnimalType.DOG))
-                .thenReturn(new FetchedImage(new byte[] {2, 2}, "image/jpeg", "https://place.dog/300/200", "place.dog"));
+                .thenReturn(new FetchedImage(new Image(new byte[] {2, 2}, "image/jpeg"), new ImageOrigin("place.dog", "https://place.dog/300/200")));
         saveOne("cat");
         saveOne("dog");
         saveOne("cat");
@@ -227,15 +231,46 @@ class PictureControllerIntegrationTest {
     @Test
     void saveAllIsAtomicWhenOneInsertFails() {
         java.time.Instant now = java.time.Instant.parse("2026-10-20T10:00:00Z");
-        com.example.animalpictures.domain.Picture valid = new com.example.animalpictures.domain.Picture(
-                null, AnimalType.CAT, new byte[] {1}, "image/jpeg", "cataas.com", "https://cataas.com/cat", now);
-        // content_type is NOT NULL in schema.sql, so this insert fails after the first one succeeded.
-        com.example.animalpictures.domain.Picture invalid = new com.example.animalpictures.domain.Picture(
-                null, AnimalType.CAT, new byte[] {2}, null, "cataas.com", "https://cataas.com/cat", now);
+        Picture first = Picture.fetch(AnimalType.CAT, new Image(new byte[] {1}, "image/jpeg"),
+                new ImageOrigin("cataas.com", "https://cataas.com/cat"), now);
+        // Same domain id again: picture_id is UNIQUE, so the second insert fails after the first succeeded.
+        Picture duplicate = Picture.restore(first.id(), AnimalType.CAT, new Image(new byte[] {2}, "image/jpeg"),
+                new ImageOrigin("cataas.com", "https://cataas.com/cat"), now);
 
-        org.assertj.core.api.Assertions.assertThatThrownBy(() -> repository.saveAll(List.of(valid, invalid)))
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> repository.saveAll(List.of(first, duplicate)))
                 .isInstanceOf(org.springframework.dao.DataAccessException.class);
         assertThat(repository.count()).isZero(); // the first insert was rolled back
+    }
+
+    @Test
+    void picturesAreIdentifiedByTheirDomainIdInTheApi() throws Exception {
+        when(client.fetchRandom(AnimalType.DOG))
+                .thenReturn(new FetchedImage(new Image(new byte[] {4, 2}, "image/png"), new ImageOrigin("place.dog", "https://place.dog/300/200")));
+
+        String body = mockMvc.perform(post("/api/pictures").contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"animal\": \"dog\", \"count\": 1}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$[0].id").value(org.hamcrest.Matchers.matchesPattern(
+                        "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")))
+                .andReturn().getResponse().getContentAsString();
+        String id = com.jayway.jsonpath.JsonPath.read(body, "$[0].id");
+
+        mockMvc.perform(get("/api/pictures/" + id + "/image"))
+                .andExpect(status().isOk())
+                .andExpect(content().bytes(new byte[] {4, 2}))
+                .andExpect(header().string("X-Picture-Id", id));
+        mockMvc.perform(get("/api/pictures/latest/metadata"))
+                .andExpect(jsonPath("$.id").value(id))
+                .andExpect(jsonPath("$.imageUrl").value("/api/pictures/" + id + "/image"));
+    }
+
+    @Test
+    void invalidPictureIdIs400AndUnknownIdIs404() throws Exception {
+        mockMvc.perform(get("/api/pictures/42/image"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.detail").value("Invalid picture id '42'"));
+        mockMvc.perform(get("/api/pictures/" + PictureId.newId() + "/image"))
+                .andExpect(status().isNotFound());
     }
 
     @Test

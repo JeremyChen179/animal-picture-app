@@ -13,12 +13,12 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 class PictureQueryUseCaseTest {
 
-    private final InMemoryPictureStore store = new InMemoryPictureStore();
-    private final PictureQueryUseCase queries = new PictureQueryUseCase(store);
+    private final InMemoryPictureRepository repository = new InMemoryPictureRepository();
+    private final PictureQueryUseCase queries = new PictureQueryUseCase(repository);
 
     @Test
     void latestOverallAndPerAnimal() {
-        store.saveAll(List.of(
+        repository.saveAll(List.of(
                 picture(AnimalType.CAT, "2026-10-19T10:00:00Z"),
                 picture(AnimalType.DOG, "2026-10-19T11:00:00Z")));
 
@@ -35,7 +35,17 @@ class PictureQueryUseCaseTest {
                 .hasMessage("limit must be between 1 and 50, was " + limit);
     }
 
-    private static Picture picture(AnimalType type, String createdAt) {
-        return new Picture(null, type, new byte[] {1}, "image/jpeg", "example.com", "https://example.com/1", Instant.parse(createdAt));
+    @Test
+    void findsByDomainId() {
+        Picture cat = picture(AnimalType.CAT, "2026-10-19T10:00:00Z");
+        repository.saveAll(List.of(cat));
+
+        assertThat(queries.findById(cat.id())).contains(cat);
+        assertThat(queries.findById(com.example.animalpictures.domain.PictureId.newId())).isEmpty();
+    }
+
+    private static Picture picture(AnimalType type, String fetchedAt) {
+        return Picture.fetch(type, new com.example.animalpictures.domain.Image(new byte[] {1}, "image/jpeg"),
+                new com.example.animalpictures.domain.ImageOrigin("example.com", "https://example.com/1"), Instant.parse(fetchedAt));
     }
 }

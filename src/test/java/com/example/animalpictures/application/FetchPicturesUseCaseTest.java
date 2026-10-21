@@ -6,6 +6,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import com.example.animalpictures.application.port.out.FetchedImage;
 import com.example.animalpictures.application.port.out.PictureSourceException;
 import com.example.animalpictures.domain.AnimalType;
+import com.example.animalpictures.domain.Image;
+import com.example.animalpictures.domain.ImageOrigin;
 import com.example.animalpictures.domain.Picture;
 import java.time.Clock;
 import java.time.Instant;
@@ -20,41 +22,52 @@ class FetchPicturesUseCaseTest {
 
     private static final Instant NOW = Instant.parse("2026-10-19T10:00:00Z");
 
-    private final InMemoryPictureStore store = new InMemoryPictureStore();
+    private final InMemoryPictureRepository repository = new InMemoryPictureRepository();
 
     private FetchPicturesUseCase useCase(FakePictureSource source) {
-        return new FetchPicturesUseCase(source, store, Clock.fixed(NOW, ZoneOffset.UTC));
+        return new FetchPicturesUseCase(source, repository, Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
     @Test
     void fetchesRequestedNumberOfPicturesAndSavesThem() {
         FakePictureSource source = new FakePictureSource(
-                new FetchedImage(new byte[] {1}, "image/jpeg", "https://place.dog/300/200", "place.dog"),
-                new FetchedImage(new byte[] {2}, "image/jpeg", "https://place.dog/400/250", "place.dog"));
+                new FetchedImage(new Image(new byte[] {1}, "image/jpeg"), new ImageOrigin("place.dog", "https://place.dog/300/200")),
+                new FetchedImage(new Image(new byte[] {2}, "image/jpeg"), new ImageOrigin("place.dog", "https://place.dog/400/250")));
 
         List<Picture> saved = useCase(source).fetchAndSave(AnimalType.DOG, 2);
 
-        assertThat(saved).extracting(Picture::id).containsExactly(1L, 2L);
-        assertThat(saved).extracting(Picture::sourceUrl)
+        assertThat(saved).extracting(picture -> picture.origin().url())
                 .containsExactly("https://place.dog/300/200", "https://place.dog/400/250");
         assertThat(saved).allSatisfy(picture -> {
             assertThat(picture.animalType()).isEqualTo(AnimalType.DOG);
-            assertThat(picture.sourceWebsite()).isEqualTo("place.dog");
-            assertThat(picture.createdAt()).isEqualTo(NOW);
+            assertThat(picture.origin().website()).isEqualTo("place.dog");
+            assertThat(picture.fetchedAt()).isEqualTo(NOW);
         });
         assertThat(source.calls).isEqualTo(2);
-        assertThat(store.saved()).hasSize(2);
+        // What was returned is exactly what was stored: the identity didn't change on save.
+        assertThat(repository.stored()).containsExactlyElementsOf(saved);
+    }
+
+    @Test
+    void eachPictureGetsItsOwnDomainIdBeforeItIsStored() {
+        FakePictureSource source = new FakePictureSource(
+                new FetchedImage(new Image(new byte[] {1}, "image/jpeg"), new ImageOrigin("place.dog", "https://place.dog/300/200")));
+
+        List<Picture> saved = useCase(source).fetchAndSave(AnimalType.DOG, 3);
+
+        assertThat(saved).extracting(Picture::id).doesNotHaveDuplicates().doesNotContainNull();
+        assertThat(repository.findById(saved.get(1).id())).contains(saved.get(1));
     }
 
     @Test
     void savesNothingWhenAnUpstreamCallFails() {
         FakePictureSource source = new FakePictureSource(
-                new FetchedImage(new byte[] {1}, "image/jpeg", "https://cataas.com/cat", "cataas.com"));
+                new FetchedImage(new Image(new byte[] {1}, "image/jpeg"), new ImageOrigin("cataas.com", "https://cataas.com/cat")));
         source.failAfter = 1;
 
         assertThatThrownBy(() -> useCase(source).fetchAndSave(AnimalType.CAT, 3)).isInstanceOf(PictureSourceException.class);
 
-        assertThat(store.saved()).isEmpty();
+        assertThat(repository.stored()).isEmpty();
     }
 
     /** The use case enforces its own limits, so no caller can trigger a huge allocation or thousands of downloads. */
@@ -71,7 +84,7 @@ class FetchPicturesUseCaseTest {
 
     @Test
     void acceptsBoundaryCounts() {
-        FetchedImage image = new FetchedImage(new byte[] {1}, "image/jpeg", "https://placebear.com/300/200", "placebear.com");
+        FetchedImage image = new FetchedImage(new Image(new byte[] {1}, "image/jpeg"), new ImageOrigin("placebear.com", "https://placebear.com/300/200"));
         assertThat(useCase(new FakePictureSource(image)).fetchAndSave(AnimalType.BEAR, 1)).hasSize(1);
         assertThat(useCase(new FakePictureSource(image)).fetchAndSave(AnimalType.BEAR, 10)).hasSize(10);
     }

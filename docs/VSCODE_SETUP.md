@@ -81,7 +81,7 @@ Use your own JDK path on Windows/Linux. Check it worked: ⇧⌘P → **Java: Con
 |---|---|
 | `<parent>` `spring-boot-starter-parent` | Inherits Spring Boot's tested dependency versions and plugin settings, so most dependencies need no `<version>` |
 | `<properties><java.version>` | Java version to compile for (21) |
-| `<dependencies>` | Libraries: web (embedded Tomcat), REST client, JDBC, validation, the **SQLite JDBC driver** (`org.xerial:sqlite-jdbc`), and test libraries |
+| `<dependencies>` | Libraries: web MVC (embedded Tomcat), REST client, JDBC, validation, Actuator (health check), Flyway (database migrations), Resilience4j (circuit breaker), the **SQLite JDBC driver** (`org.xerial:sqlite-jdbc`), and for tests the Spring Boot test starters and ArchUnit |
 | `<build><plugins>` `spring-boot-maven-plugin` | Packages the app as a single **executable jar** (`java -jar`) and provides `spring-boot:run` |
 
 **Adding a library:** add a `<dependency>` block to `pom.xml` and save. VS Code re-imports automatically (`java.configuration.updateBuildConfiguration` is `automatic` in `.vscode/settings.json`) and downloads it. To force a refresh: right-click `pom.xml` → **Reload Projects**, or ⇧⌘P → **Java: Clean Java Language Server Workspace**.

@@ -1,247 +1,90 @@
 # Animal Picture App
 
-A Spring Boot microservice that fetches random pictures of cats, dogs or bears from public picture APIs, stores them in an embedded **SQLite** database (image binary, timestamp, source website), and returns the latest stored picture. A simple web UI is served by the same app.
+A Spring Boot microservice that fetches random pictures of cats, dogs or bears from public APIs, stores them in an embedded SQLite database, and returns the last stored picture of an animal. A simple web UI is served by the same app.
 
-**Stack:** Java 21 · Spring Boot 4.1 · Maven (wrapper included) · SQLite (`sqlite-jdbc`) · Resilience4j · JUnit 5 / Mockito · Docker · GitHub Actions
+**Stack:** Java 21 · Spring Boot 4.1 · Maven (wrapper included) · SQLite + Flyway · Resilience4j · JUnit 6 + ArchUnit · Docker · GitHub Actions
 
-## Running it
+![UI screenshot](docs/ui-screenshot.png)
 
-You can build and run it **from source** or **in Docker**. Each path works on its own.
+## Quick start
 
-### Option 1: From source (needs JDK 21)
-
-```bash
-./mvnw spring-boot:run          # macOS / Linux
-mvnw.cmd spring-boot:run        # Windows
-```
-
-Or build the executable jar and run it:
+**From source** (needs JDK 21; no Maven install or database setup needed):
 
 ```bash
-./mvnw package
-java -jar target/animal-picture-app-1.0.0.jar
+./mvnw spring-boot:run            # Windows: mvnw.cmd spring-boot:run
 ```
 
-- **No Maven install needed:** the wrapper downloads Maven.
-- **No database setup needed:** the SQLite driver creates `./data/pictures.db` automatically on first start.
-- **No application server needed:** the jar is a self-contained executable with an embedded web server (Tomcat inside the jar). You don't deploy it to a separate Tomcat or Apache server; `java -jar` is all it takes.
-
-### Option 2: Docker (no Java needed)
+**With Docker** (no Java needed):
 
 ```bash
 docker compose up --build
 ```
 
-The multi-stage `Dockerfile` builds from source inside the container (JDK stage, tests included) and runs the jar on a JRE-only image as a non-root user. The SQLite file is kept in the `picture-data` volume. `docker compose down -v` deletes it.
+Then open **http://localhost:8080**.
 
-Then open **http://localhost:8080** for the UI.
-
-### Tests
+**Tests:**
 
 ```bash
-./mvnw test
+./mvnw test                       # 103 tests, no network access needed
 ```
 
-103 tests:
+**Executable jar:** `./mvnw package && java -jar target/animal-picture-app-1.0.0.jar`. The jar embeds its web server, so no separate application server is needed.
 
-- **Use-case tests:** plain Java, with in-memory fakes for the ports (no Spring, no mocks), including the `count` and `limit` rules.
-- **Architecture tests** (ArchUnit): enforce the dependency rule described below, so CI fails if, for example, a use case imports Spring or the web layer calls an adapter directly.
-- **Adapter tests:** the HTTP picture source with a mocked HTTP server (image and JSON sources, fallback, URL rewriting, circuit breaker open / half-open / close), JSON Pointer lookup, and the service.
-- **Config test:** checks that the shipped `application.yml` gives every animal a backup source.
-- **Domain tests:** `Picture` identity and equality, and the `PictureId`, `Image` and `ImageOrigin` value objects.
-- **Repository and migration tests** against real SQLite files created by the Flyway migrations, including upgrading a database from the previous schema.
-- **Integration tests:** the full app with a real SQLite file, with only the external APIs mocked, including a test that reads aren't blocked while a slow fetch is downloading.
+## How the brief is covered
 
-They need no network access, so they run in CI.
+| Requirement | Where |
+|---|---|
+| REST endpoint to fetch and save pictures by animal type and count | `POST /api/pictures` with `{"animal": "cat\|dog\|bear", "count": 1-10}` |
+| Pictures stored in a database | Embedded SQLite (`data/pictures.db`, created on first start). Schema managed by Flyway migrations in `src/main/resources/db/migration` |
+| REST endpoint for the last stored picture of an animal | `GET /api/pictures/{animal}/last` (image) and `…/last/metadata` (JSON) |
+| Containerized | Multi-stage `Dockerfile` (builds and tests from source, runs as non-root) and `docker-compose.yml` with a data volume |
+| Builds and runs with and without containers | `./mvnw spring-boot:run` or `docker compose up --build`. Both verified. CI builds and tests both on every push |
+| Database shipped with the app, not a local setup | SQLite is embedded and created automatically |
+| README | This file. Design details are in [`docs/DESIGN.md`](docs/DESIGN.md) |
+| Bonus: automated tests | 103 tests: domain, use cases, adapters, real SQLite, whole-app integration, architecture rules. Run by GitHub Actions on every push and PR |
+| Bonus: simple UI | `http://localhost:8080`: fetch pictures, a gallery of recent ones, and the status of each picture source |
+
+**placekitten.com is offline** (HTTP 521), so cats come from **cataas.com**, which is on the public-apis list, as the brief allows. Dogs come from place.dog and bears from placebear.com.
 
 ## API
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/pictures` | **a.** Fetches random pictures and stores them. Body: `{"animal": "cat\|dog\|bear", "count": 1-10}`. Returns `201` with metadata for each saved picture. |
-| `GET` | `/api/pictures?animal=&limit=` | Recently stored pictures, newest first (metadata only). `animal` is optional; `limit` is 1–50, default 12 |
-| `GET` | `/api/pictures/latest` | **b.** The **latest fetched picture** (any animal), as an image |
-| `GET` | `/api/pictures/latest/metadata` | Its metadata as JSON |
-| `GET` | `/api/pictures/{animal}/last` | Latest picture of one animal, as an image |
-| `GET` | `/api/pictures/{animal}/last/metadata` | Its metadata as JSON |
-| `GET` | `/api/pictures/{id}/image` | Any stored picture by its id (a UUID). An invalid id gives `400`, an unknown one `404` |
-| `GET` | `/actuator/health` | Health check (`{"status":"UP"}`), used by the Docker `HEALTHCHECK` |
-| `GET` | `/api/sources` | Every picture source and its circuit-breaker state (`CLOSED` = in use, `OPEN` = temporarily skipped, `HALF_OPEN` = next call is a trial) |
+| `POST` | `/api/pictures` | Fetch and store pictures. Returns `201` with each picture's metadata |
+| `GET` | `/api/pictures/{animal}/last` | Last stored picture of an animal, as an image (`…/metadata` for JSON) |
+| `GET` | `/api/pictures/latest` | Last stored picture of any animal (`…/metadata` for JSON) |
+| `GET` | `/api/pictures?animal=&limit=` | Recent pictures, newest first (metadata only) |
+| `GET` | `/api/pictures/{id}/image` | Any stored picture by its id (a UUID) |
+| `GET` | `/api/sources` | Each picture source and whether it's currently in use or skipped |
+| `GET` | `/actuator/health` | Health check (used by the Docker `HEALTHCHECK`) |
 
 ```bash
-# a. Fetch and store 3 dog pictures
-curl -X POST localhost:8080/api/pictures \
-  -H 'Content-Type: application/json' \
-  -d '{"animal": "dog", "count": 3}'
-
-# b. Download the latest fetched picture
-curl -o latest.jpg localhost:8080/api/pictures/latest
-curl localhost:8080/api/pictures/latest/metadata
-# {"id":"aefe3889-cfe7-4cf9-a54e-caa0ffe404b2","animalType":"BEAR","contentType":"image/jpeg",
-#  "sizeBytes":25134,"sourceWebsite":"placebear.com","sourceUrl":"https://placebear.com/484/274",
-#  "createdAt":"2026-10-22T09:40:14.572703Z","imageUrl":"/api/pictures/aefe3889-cfe7-4cf9-a54e-caa0ffe404b2/image"}
+curl -X POST localhost:8080/api/pictures -H 'Content-Type: application/json' -d '{"animal": "dog", "count": 3}'
+curl -o dog.jpg localhost:8080/api/pictures/dog/last
 ```
 
-## Database schema
+Errors come back as problem JSON: `400` for invalid input, `404` when nothing is stored yet, `502` when every source for that animal failed.
 
-The schema is managed by **Flyway** migrations in [`src/main/resources/db/migration`](src/main/resources/db/migration), which run at startup:
+## Design highlights
 
-| Migration | Change |
-|---|---|
-| `V1__create_picture_table.sql` | The original table |
-| `V2__add_domain_picture_id.sql` | Adds `picture_id`, the picture's domain id (UUID), and gives existing rows one |
+- **Resilient fetching:**
+  - each animal has backup sources, tried in order;
+  - timeouts, a 10 MB size limit and a check that the response really is an image;
+  - a per-source **circuit breaker** skips a failing source for 60 s, so requests go straight to the backup.
+- **All or nothing:** a request's pictures are downloaded first, then saved in one short transaction. A failure saves nothing, and a slow download never blocks other requests.
+- **Clean architecture:** domain and use cases have no Spring, HTTP or SQL in them. Adapters implement their interfaces, and ArchUnit tests enforce the dependency direction.
+- **Domain-driven model:**
+  - `Picture` is an entity whose identity (`PictureId`, a UUID) is assigned by the domain, not the database;
+  - `Image` and `ImageOrigin` are value objects that can't be invalid;
+  - the database's row id never leaves the persistence adapter.
+- **Strict input:** `count` must be a JSON integer from 1 to 10. That's enforced in the use case itself, not only over HTTP.
 
-The resulting table:
+More detail: [`docs/DESIGN.md`](docs/DESIGN.md) (architecture, domain model, database schema and migrations, picture sources, error handling, circuit breaker, configuration, tests). Setting up the project in VS Code: [`docs/VSCODE_SETUP.md`](docs/VSCODE_SETUP.md).
 
-```sql
-CREATE TABLE picture (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT, -- internal row id: never leaves the persistence adapter
-    picture_id     TEXT    NOT NULL UNIQUE,           -- the picture's domain id (PictureId, a UUID)
-    animal_type    TEXT    NOT NULL CHECK (animal_type IN ('CAT', 'DOG', 'BEAR')),
-    image          BLOB    NOT NULL,   -- the picture's binary data
-    content_type   TEXT    NOT NULL,   -- e.g. image/jpeg
-    source_website TEXT    NOT NULL,   -- e.g. placebear.com
-    source_url     TEXT    NOT NULL,   -- full URL it was downloaded from
-    created_at     TEXT    NOT NULL    -- fetch timestamp, ISO-8601 UTC
-);
-CREATE INDEX idx_picture_created_at ON picture (created_at);
-CREATE INDEX idx_picture_animal_created_at ON picture (animal_type, created_at);
-```
-
-- **Two ids, two owners.** `picture_id` is the domain's id: assigned by the application when a picture is fetched, and the id used in the API. `id` is the database's own row id. It's only used inside `SqlitePictureRepository`, as an insertion-order tie-breaker when sorting; no other class can see it.
-- **Upgrading older databases:** a database created before Flyway was added (old schema, no history table) is baselined at V1, and then only V2 runs. Existing pictures keep their data and get a UUID. Tested with a database created by the previous version.
-- **The SQLite file is created on the fly.** The `org.xerial:sqlite-jdbc` driver, added through Maven, bundles the native SQLite library and creates the `.db` file on first connection. The app creates the parent directory (`./data`) if it's missing.
-- **Timestamp:** SQLite has no native timestamp type, so `created_at` is stored as **fixed-width** ISO-8601 UTC text (always 9 fractional digits, e.g. `2026-10-19T07:17:19.572703000Z`). That makes plain string ordering chronological, so "latest" is `ORDER BY created_at DESC, id DESC LIMIT 1`.
-- **Inspecting the database:** `sqlite3 data/pictures.db "SELECT picture_id, animal_type, source_website, created_at, length(image) FROM picture ORDER BY created_at DESC;"`
-
-## Error handling
-
-| Situation | Behaviour |
-|---|---|
-| A picture source is down, slow, returns something that isn't an image, or (for JSON sources) returns no image URL | Tries the **next source** for that animal (see below) |
-| All sources for an animal fail | `502 Bad Gateway` with the reason; **nothing is saved** |
-| Upstream too slow | 5 s connect / 10 s read timeout, then fall back or fail |
-| Image larger than 10 MB | Rejected without reading it all into memory. The size is checked against `Content-Length` and again while reading |
-| A JSON source returns an image URL that isn't `https` or isn't on its allowed hosts | Rejected, so a compromised API can't make the app fetch other (e.g. internal) addresses |
-| A source keeps failing | **Circuit breaker:** after 2 failures in a row the source is skipped for 60 s, so requests go straight to the backup with no timeout wait (see below) |
-| Partial failure in a batch (e.g. picture 3 of 5 fails) | All pictures are downloaded before anything is saved, and saving happens in one transaction, so there are no partial batches |
-| A slow fetch is running | Other requests aren't blocked. Downloads happen *outside* the database transaction, which only covers the short save at the end. SQLite uses a single connection, so holding it during downloads would make every other request wait and fail |
-| Unknown animal, `count` outside 1–10 or not a JSON integer (e.g. `1.5`, `"3"`), malformed JSON | `400 Bad Request`. The use case also enforces 1–10 itself, so the rule holds for any caller, not only HTTP |
-| No picture stored yet | `404 Not Found` |
-
-Errors are returned in the standard problem JSON format (RFC 9457): `{"status": 502, "title": "Bad Gateway", "detail": "..."}`.
-
-**Picture sources:** every animal has at least one backup. The sources are tried in order:
-
-| Animal | Primary | Backups |
-|---|---|---|
-| Cat | [cataas.com](https://cataas.com) | [placecats.com](https://placecats.com) |
-| Dog | [place.dog](https://place.dog) | [placedog.net](https://placedog.net), then [dog.ceo](https://dog.ceo/dog-api/) |
-| Bear | [placebear.com](https://placebear.com) | [iNaturalist API](https://api.inaturalist.org/v1/docs/) (openly licensed research-grade bear photos) |
-
-- **placekitten.com** (from the brief) is offline (HTTP 521), so cats come from cataas.com, which is on the public-apis list. cataas.com itself went down several times while I was testing (timeouts of 10–40 s), which is why every animal now has a backup.
-- **Two kinds of source**, both configured in `application.yml` under `pictures.sources`:
-  - **Image sources** return the picture directly, e.g. `https://placebear.com/{width}/{height}`. place.dog, placedog.net and placebear return the *same* picture for the same size, so each request uses a random width and height (200–600 px).
-  - **JSON sources** return JSON containing the picture's URL, so the fetch has two steps. Each one must list `allowed-image-hosts`; the extracted URL has to be `https` on one of them. `image-url-path` is a JSON Pointer to that URL (e.g. `/message` for dog.ceo). For iNaturalist, a random results page (`{random}`, 1–7,000) gives a random bear. `image-url-find`/`image-url-replace` swap the 75 px thumbnail for the medium-size photo, and only CC0 / CC-BY / CC-BY-SA photos are requested.
-- **`source_website`** is the host of the source that served the picture (e.g. `api.inaturalist.org`). **`source_url`** is the exact image URL that was downloaded.
-
-### Circuit breaker
-
-Each picture source has its own circuit breaker ([Resilience4j](https://resilience4j.readme.io/docs/circuitbreaker)):
-
-- **CLOSED** (normal): the source is called as usual.
-- **OPEN**: after **2 failures in a row**, the source is **skipped for 60 seconds**. Requests go straight to the next source instead of waiting out a timeout.
-- **HALF_OPEN**: after the 60 s, the next request is a **trial call**. If it succeeds the circuit closes; if it fails it opens for another 60 s.
-- **If every source for an animal is open**, the request fails immediately with `502` and doesn't wait.
-
-Measured with a dead primary (connect timeout) and the real placecats.com as backup:
-
-| Request | Time | |
-|---|---|---|
-| 1 | 6.4 s | primary times out → backup |
-| 2 | 5.9 s | primary times out → backup, **circuit opens** |
-| 3–6 | 0.25–0.47 s | primary skipped → backup immediately |
-
-Check the live state with `GET /api/sources`. Tune it with `pictures.circuit-breaker.failure-threshold` and `open-duration` in `application.yml`.
-
-## Web UI and CORS
-
-- **UI:** the Spring Boot app also serves a small web UI (`src/main/resources/static/index.html`) at `/`. Plain HTML and JavaScript, no framework. It has three parts:
-  - **Fetch pictures:** choose an animal and count, fetch and save, or show the latest picture.
-  - **Recent pictures:** a gallery of the latest 24 pictures, filterable by animal, showing each one's source website and time. It refreshes after every fetch.
-  - **Picture sources:** every source with its circuit-breaker state (`CLOSED` / `OPEN` / `HALF_OPEN`) and recent failures. It refreshes every 5 s.
-
-  ![UI screenshot](docs/ui-screenshot.png)
-
-  *Screenshot taken with the cat primary deliberately pointed at a dead address, to show an `OPEN` circuit; the cats came from the placecats.com backup.*
-
-- **CORS isn't needed for this UI.** It's served from the same origin as the API.
-- **CORS is configured for `/api/**`** so a UI hosted elsewhere (e.g. a React dev server) can call the API. Allowed origins come from `CORS_ALLOWED_ORIGINS`, default `http://localhost:3000,http://localhost:5173`. Requests from other origins are rejected with `403`.
-
-## Configuration
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `PORT` | `8080` | HTTP port |
-| `DB_URL` | `jdbc:sqlite:./data/pictures.db` | SQLite database location |
-| `CORS_ALLOWED_ORIGINS` | `http://localhost:3000,http://localhost:5173` | Comma-separated origins allowed to call `/api/**` |
-
-Circuit-breaker settings (`pictures.circuit-breaker.failure-threshold`, default 2; `open-duration`, default 60s), the image size limit (`pictures.max-image-size`, default 10MB) and the picture sources are in `application.yml`.
-
-## CI/CD
-
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push and pull request:
-
-1. **build-and-test:** `./mvnw -B verify` on JDK 21. It uploads the test reports and the executable jar as artifacts.
-2. **docker-build:** builds the Docker image, which also runs the tests in the build stage.
-
-## Architecture
-
-The code follows **clean architecture** (ports and adapters). Dependencies point **inwards only**:
-
-```
- adapter.in.web ─┐                         ┌─ adapter.out.persistence (SQLite)
-                 ├─▶ application ─▶ domain ◀┤
- config ─────────┘   (use cases + ports)    └─ adapter.out.pictures (HTTP APIs)
-```
-
-```
-src/main/java/com/example/animalpictures/
-  domain/                    Picture (entity), PictureId, Image, ImageOrigin (value objects), AnimalType,
-                             PictureRepository (repository interface), PictureSummary. Plain Java
-  application/               Use cases: FetchPicturesUseCase, PictureQueryUseCase, SourceStatusUseCase
-    port/out/                PictureSource: where pictures come from (+ its data types)
-  adapter/in/web/            REST controllers, request/response records, error handling, CORS, strict JSON
-  adapter/out/persistence/   SqlitePictureRepository implements PictureRepository (JDBC)
-  adapter/out/pictures/      HttpPictureSource implements PictureSource (fallback, circuit breaker, limits)
-  config/                    Wires the use cases to the adapters (the only place that knows both)
-src/main/resources/
-  application.yml   configuration
-  db/migration/     database migrations (Flyway)
-  static/index.html web UI
-```
-
-- **The use cases don't know about Spring, HTTP or SQL.** They only use the `PictureSource` and `PictureRepository` interfaces, so they're tested with simple in-memory fakes. Swapping SQLite for another database, or adding a picture provider, means writing a new adapter without touching the use cases.
-- **The rules are enforced by tests.** `ArchitectureTest` (ArchUnit) fails the build if the domain or application layer depends on Spring or an adapter, if the web layer uses an outbound adapter directly, or if the outbound adapters depend on each other.
-### Domain model (DDD)
-
-- **`Picture` is an entity, and the aggregate root.** Its identity is a `PictureId` (a UUID) **assigned by the domain** when the picture is fetched (`Picture.fetch(...)`), not by the database. A picture is complete, id included, before it's stored, and storing it doesn't change it. Repositories rebuild stored pictures with `Picture.restore(...)`. Two pictures are equal only if their ids are equal.
-- **Value objects** make invalid states impossible:
-  - **`Image`:** non-empty bytes with an `image/*` type; the bytes are copied in and out, so it can't be changed after creation.
-  - **`ImageOrigin`:** source website and URL.
-  - **`PictureId`:** only the canonical UUID form is accepted.
-- **`PictureRepository` lives in the domain.** It's the collection of pictures, expressed in domain terms (`findById(PictureId)`, `findLatest()`…). The SQLite adapter implements it, and the database's row id stays inside that adapter.
-- **Enforced by `ArchitectureTest`:** the repository interface must be in the domain, and nothing outside the persistence adapter may depend on it.
-
-- **Kept pragmatic:** one Maven module, records shared between layers where a separate mapping would add nothing, and the transaction boundary inside the persistence adapter (`saveAll`).
-
-## Setting up in VS Code
-
-See **[docs/VSCODE_SETUP.md](docs/VSCODE_SETUP.md)**. It covers the JDK, extensions, Maven integration, `pom.xml`, library downloads, and running, debugging and testing.
-
-## What I'd add with more time
+## Not included / next steps
 
 - **Parallel downloads** for larger `count` values (e.g. with virtual threads).
-- **Metrics:** expose Actuator metrics (e.g. Prometheus) for request rates and source failures.
-- **OpenAPI docs** (springdoc) and a paginated `GET /api/pictures` listing.
-- **A smaller image:** a jlink-trimmed JRE or a distroless base.
+- **Metrics:** Actuator/Prometheus metrics for request rates and source failures.
+- **OpenAPI documentation** (springdoc) and pagination for the picture list.
+- **Shared circuit-breaker state:** it's kept in memory per app instance, which is fine for a single instance.
+- **A smaller Docker image**, e.g. a jlink-trimmed JRE or a distroless base.

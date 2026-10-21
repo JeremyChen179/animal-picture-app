@@ -64,10 +64,10 @@ class HttpPictureSourceTest {
 
         FetchedImage image = client.fetchRandom(AnimalType.BEAR);
 
-        assertThat(image.data()).isEqualTo(JPEG);
-        assertThat(image.contentType()).isEqualTo("image/jpeg");
-        assertThat(image.sourceUrl()).isEqualTo("https://placebear.test/300/300");
-        assertThat(image.sourceWebsite()).isEqualTo("placebear.test");
+        assertThat(image.image().bytes()).isEqualTo(JPEG);
+        assertThat(image.image().contentType()).isEqualTo("image/jpeg");
+        assertThat(image.origin().url()).isEqualTo("https://placebear.test/300/300");
+        assertThat(image.origin().website()).isEqualTo("placebear.test");
         server.verify();
     }
 
@@ -77,7 +77,7 @@ class HttpPictureSourceTest {
         server.expect(requestTo("https://placedog.test/300/300"))
                 .andRespond(withSuccess(JPEG, MediaType.parseMediaType("image/jpg")));
 
-        assertThat(client.fetchRandom(AnimalType.DOG).contentType()).isEqualTo("image/jpeg");
+        assertThat(client.fetchRandom(AnimalType.DOG).image().contentType()).isEqualTo("image/jpeg");
     }
 
     @Test
@@ -116,10 +116,10 @@ class HttpPictureSourceTest {
 
         FetchedImage image = client.fetchRandom(AnimalType.DOG);
 
-        assertThat(image.sourceUrl()).isEqualTo("https://images.dogs.test/collie.jpg");
+        assertThat(image.origin().url()).isEqualTo("https://images.dogs.test/collie.jpg");
         // The website is the source API's host, not the image host.
-        assertThat(image.sourceWebsite()).isEqualTo("dogs.test");
-        assertThat(image.data()).isEqualTo(JPEG);
+        assertThat(image.origin().website()).isEqualTo("dogs.test");
+        assertThat(image.image().bytes()).isEqualTo(JPEG);
         server.verify();
     }
 
@@ -135,7 +135,7 @@ class HttpPictureSourceTest {
         server.expect(requestTo("https://photos.test/1/medium.jpg"))
                 .andRespond(withSuccess(JPEG, MediaType.IMAGE_JPEG));
 
-        assertThat(client.fetchRandom(AnimalType.BEAR).sourceUrl()).isEqualTo("https://photos.test/1/medium.jpg");
+        assertThat(client.fetchRandom(AnimalType.BEAR).origin().url()).isEqualTo("https://photos.test/1/medium.jpg");
         server.verify();
     }
 
@@ -224,7 +224,7 @@ class HttpPictureSourceTest {
         HttpPictureSource client = clientWith(Map.of(AnimalType.BEAR, List.of(Source.image("https://placebear.test/{width}/{height}"))));
         server.expect(requestTo("https://placebear.test/300/300")).andRespond(withSuccess(new byte[100], MediaType.IMAGE_JPEG));
 
-        assertThat(client.fetchRandom(AnimalType.BEAR).data()).hasSize(100);
+        assertThat(client.fetchRandom(AnimalType.BEAR).image().bytes()).hasSize(100);
     }
 
     // --- fallback ---
@@ -237,7 +237,7 @@ class HttpPictureSourceTest {
         server.expect(requestTo("https://cats-primary.test/300/300")).andRespond(withServerError());
         server.expect(requestTo("https://cats-backup.test/300/300")).andRespond(withSuccess(JPEG, MediaType.IMAGE_JPEG));
 
-        assertThat(client.fetchRandom(AnimalType.CAT).sourceUrl()).isEqualTo("https://cats-backup.test/300/300");
+        assertThat(client.fetchRandom(AnimalType.CAT).origin().url()).isEqualTo("https://cats-backup.test/300/300");
         server.verify();
     }
 
@@ -251,7 +251,7 @@ class HttpPictureSourceTest {
                 .andRespond(withSuccess("{\"message\": \"https://img.test/d.jpg\"}", MediaType.APPLICATION_JSON));
         server.expect(requestTo("https://img.test/d.jpg")).andRespond(withSuccess(JPEG, MediaType.IMAGE_JPEG));
 
-        assertThat(client.fetchRandom(AnimalType.DOG).sourceUrl()).isEqualTo("https://img.test/d.jpg");
+        assertThat(client.fetchRandom(AnimalType.DOG).origin().url()).isEqualTo("https://img.test/d.jpg");
         server.verify();
     }
 
@@ -293,7 +293,7 @@ class HttpPictureSourceTest {
         server.expect(requestTo("https://cats-backup.test/300/300")).andRespond(withSuccess(JPEG, MediaType.IMAGE_JPEG));
 
         for (int i = 0; i < 3; i++) {
-            assertThat(client.fetchRandom(AnimalType.CAT).sourceUrl()).isEqualTo("https://cats-backup.test/300/300");
+            assertThat(client.fetchRandom(AnimalType.CAT).origin().url()).isEqualTo("https://cats-backup.test/300/300");
         }
 
         server.verify();
@@ -317,7 +317,7 @@ class HttpPictureSourceTest {
 
         Thread.sleep(OPEN_DURATION.toMillis() + 200);
         // Trial call (HALF_OPEN): the primary has recovered.
-        assertThat(client.fetchRandom(AnimalType.CAT).sourceUrl()).isEqualTo("https://cats-primary.test/300/300");
+        assertThat(client.fetchRandom(AnimalType.CAT).origin().url()).isEqualTo("https://cats-primary.test/300/300");
         server.verify();
         assertThat(stateOf(client, 0)).isEqualTo("CLOSED");
     }
@@ -335,7 +335,7 @@ class HttpPictureSourceTest {
         client.fetchRandom(AnimalType.CAT);
         Thread.sleep(OPEN_DURATION.toMillis() + 200);
 
-        assertThat(client.fetchRandom(AnimalType.CAT).sourceUrl()).isEqualTo("https://cats-backup.test/300/300");
+        assertThat(client.fetchRandom(AnimalType.CAT).origin().url()).isEqualTo("https://cats-backup.test/300/300");
         server.verify();
         assertThat(stateOf(client, 0)).isEqualTo("OPEN");
     }

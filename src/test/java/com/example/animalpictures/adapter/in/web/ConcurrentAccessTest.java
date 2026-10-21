@@ -8,6 +8,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 
 import com.example.animalpictures.application.port.out.PictureSource;
 import com.example.animalpictures.application.port.out.FetchedImage;
+import com.example.animalpictures.domain.Image;
+import com.example.animalpictures.domain.ImageOrigin;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -44,7 +46,7 @@ class ConcurrentAccessTest {
         when(client.fetchRandom(any())).thenAnswer(invocation -> {
             downloadStarted.countDown();
             finishDownload.await(10, TimeUnit.SECONDS); // simulate a slow upstream API
-            return new FetchedImage(new byte[] {1}, "image/jpeg", "https://placebear.com/300/200", "placebear.com");
+            return new FetchedImage(new Image(new byte[] {1}, "image/jpeg"), new ImageOrigin("placebear.com", "https://placebear.com/300/200"));
         });
 
         CompletableFuture<Integer> slowFetch = CompletableFuture.supplyAsync(() -> {

@@ -1,11 +1,14 @@
 package com.example.animalpictures.application.port.out;
 
-/**
- * Raw image as downloaded from an upstream picture API.
- *
- * @param sourceUrl     URL the image bytes were downloaded from
- * @param sourceWebsite host of the configured source API, e.g. {@code placebear.com} or {@code api.inaturalist.org}
- *                      (for JSON sources this differs from the image host)
- */
-public record FetchedImage(byte[] data, String contentType, String sourceUrl, String sourceWebsite) {
+import com.example.animalpictures.domain.Image;
+import com.example.animalpictures.domain.ImageOrigin;
+import java.util.Objects;
+
+/** What a {@link PictureSource} returns: a downloaded image and where it came from. */
+public record FetchedImage(Image image, ImageOrigin origin) {
+
+    public FetchedImage {
+        Objects.requireNonNull(image, "image is required");
+        Objects.requireNonNull(origin, "origin is required");
+    }
 }

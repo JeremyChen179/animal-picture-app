@@ -1,8 +1,9 @@
 package com.example.animalpictures.application;
 
-import com.example.animalpictures.application.port.out.PictureStore;
 import com.example.animalpictures.domain.AnimalType;
 import com.example.animalpictures.domain.Picture;
+import com.example.animalpictures.domain.PictureId;
+import com.example.animalpictures.domain.PictureRepository;
 import com.example.animalpictures.domain.PictureSummary;
 import java.util.List;
 import java.util.Optional;
@@ -12,30 +13,30 @@ public class PictureQueryUseCase {
 
     public static final int MAX_RECENT = 50;
 
-    private final PictureStore pictureStore;
+    private final PictureRepository pictureRepository;
 
-    public PictureQueryUseCase(PictureStore pictureStore) {
-        this.pictureStore = pictureStore;
+    public PictureQueryUseCase(PictureRepository pictureRepository) {
+        this.pictureRepository = pictureRepository;
     }
 
-    /** The latest stored picture of any animal. */
+    /** The most recently fetched picture of any animal. */
     public Optional<Picture> findLatest() {
-        return pictureStore.findLatest();
+        return pictureRepository.findLatest();
     }
 
     public Optional<Picture> findLatest(AnimalType animalType) {
-        return pictureStore.findLatestByAnimalType(animalType);
+        return pictureRepository.findLatestByAnimalType(animalType);
     }
 
-    public Optional<Picture> findById(long id) {
-        return pictureStore.findById(id);
+    public Optional<Picture> findById(PictureId id) {
+        return pictureRepository.findById(id);
     }
 
-    /** Most recent pictures first; {@code animalType} may be null for all animals. */
+    /** Most recently fetched first; {@code animalType} may be null for all animals. */
     public List<PictureSummary> findRecent(AnimalType animalType, int limit) {
         if (limit < 1 || limit > MAX_RECENT) {
             throw new IllegalArgumentException("limit must be between 1 and " + MAX_RECENT + ", was " + limit);
         }
-        return pictureStore.findRecent(animalType, limit);
+        return pictureRepository.findRecent(animalType, limit);
     }
 }

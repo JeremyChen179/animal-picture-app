@@ -51,6 +51,11 @@
             <artifactId>resilience4j-circuitbreaker</artifactId>
             <version>${resilience4j.version}</version>
         </dependency>
+        <!-- Versioned database migrations (src/main/resources/db/migration); SQLite support is in Flyway core. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-flyway</artifactId>
+        </dependency>
         <!-- SQLite JDBC driver: bundles the native SQLite library and creates the .db file on first connect. -->
         <dependency>
             <groupId>org.xerial</groupId>

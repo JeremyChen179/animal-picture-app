@@ -7,6 +7,8 @@ import com.example.animalpictures.application.port.out.PictureSource;
 import com.example.animalpictures.application.port.out.PictureSourceException;
 import com.example.animalpictures.application.port.out.SourceStatus;
 import com.example.animalpictures.domain.AnimalType;
+import com.example.animalpictures.domain.Image;
+import com.example.animalpictures.domain.ImageOrigin;
 import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
@@ -180,7 +182,7 @@ public class HttpPictureSource implements PictureSource {
                         if (body.length == 0) {
                             throw new PictureSourceException("Upstream " + url + " returned an empty image");
                         }
-                        return new FetchedImage(body, normalize(contentType), url, sourceWebsite);
+                        return new FetchedImage(new Image(body, normalize(contentType)), new ImageOrigin(sourceWebsite, url));
                     });
         } catch (RestClientException e) {
             throw new PictureSourceException("Failed to fetch " + animalType + " picture from " + url, e);

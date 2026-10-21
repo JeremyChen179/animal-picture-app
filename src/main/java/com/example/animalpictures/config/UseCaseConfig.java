@@ -4,7 +4,7 @@ import com.example.animalpictures.application.FetchPicturesUseCase;
 import com.example.animalpictures.application.PictureQueryUseCase;
 import com.example.animalpictures.application.SourceStatusUseCase;
 import com.example.animalpictures.application.port.out.PictureSource;
-import com.example.animalpictures.application.port.out.PictureStore;
+import com.example.animalpictures.domain.PictureRepository;
 import java.time.Clock;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -17,13 +17,13 @@ import org.springframework.context.annotation.Configuration;
 class UseCaseConfig {
 
     @Bean
-    FetchPicturesUseCase fetchPicturesUseCase(PictureSource pictureSource, PictureStore pictureStore, Clock clock) {
-        return new FetchPicturesUseCase(pictureSource, pictureStore, clock);
+    FetchPicturesUseCase fetchPicturesUseCase(PictureSource pictureSource, PictureRepository pictureRepository, Clock clock) {
+        return new FetchPicturesUseCase(pictureSource, pictureRepository, clock);
     }
 
     @Bean
-    PictureQueryUseCase pictureQueryUseCase(PictureStore pictureStore) {
-        return new PictureQueryUseCase(pictureStore);
+    PictureQueryUseCase pictureQueryUseCase(PictureRepository pictureRepository) {
+        return new PictureQueryUseCase(pictureRepository);
     }
 
     @Bean
